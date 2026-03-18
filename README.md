@@ -1,4 +1,4 @@
-# Heightmap Analysis Framework
+# Heightmap Analysis Framework (WIP)
 
 ## Core Philosophy
 A heightmap is a 2.5D scalar field: perfect geometric surface information, zero information about what lies above, 
