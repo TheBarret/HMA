@@ -10,7 +10,8 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 0: Calibration (The Observable)
 *Before examining data, define the measurement context.*
 
-<img width="720" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/e9caaffa-1293-42d9-a307-0dd78a568c43" />
+
+<img width="720" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/dc07e3a4-df0e-40d7-99c1-89370aeab41f" />
 
 
 - **Input:** Raw grayscale image (0-255)
@@ -23,7 +24,8 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 1: Local Geometry (First Derivatives)
 *How does the surface behave at this exact point?*
 
-<img width="720" alt="layer1_lgeometric_results" src="https://github.com/user-attachments/assets/fa805e81-28d9-4bb9-a876-211c7da11535" />
+<img width="720" alt="layer1_lgeometric_results" src="https://github.com/user-attachments/assets/bc568115-3432-456a-9d7b-1569f6780428" />
+
 
 - **Input:** Calibrated surface
 - **Operations:**
@@ -34,6 +36,9 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 ### Layer 2: Regional Geometry (Second Derivatives)
 *What shape does the neighborhood form around this point?*
+
+<img width="720" alt="layer2_regional_geometry_results" src="https://github.com/user-attachments/assets/aab64e15-318d-451c-b83a-6e600e327b99" />
+
 
 - **Input:** Gradient maps
 - **Operations:**
