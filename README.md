@@ -10,7 +10,8 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 0: Calibration (The Observable)
 *Before examining data, define the measurement context.*
 
-<img width="720" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/57867d6e-409a-443f-bd3f-64856e012a69" />
+<img width="720" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/e9caaffa-1293-42d9-a307-0dd78a568c43" />
+
 
 - **Input:** Raw grayscale image (0-255)
 - **Operations:**
@@ -21,6 +22,8 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 ### Layer 1: Local Geometry (First Derivatives)
 *How does the surface behave at this exact point?*
+
+<img width="720" alt="layer1_lgeometric_results" src="https://github.com/user-attachments/assets/fa805e81-28d9-4bb9-a876-211c7da11535" />
 
 - **Input:** Calibrated surface
 - **Operations:**
