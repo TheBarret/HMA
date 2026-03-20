@@ -10,7 +10,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 0: Calibration (The Observable)
 *Before examining data, define the measurement context.*
 
-<img width="1024" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/5a72d3d3-2550-4885-b61d-01f3bcb3cc2c" />
+<img width="720" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/57867d6e-409a-443f-bd3f-64856e012a69" />
 
 - **Input:** Raw grayscale image (0-255)
 - **Operations:**
