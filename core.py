@@ -304,7 +304,7 @@ class PeakFeature(ClassifiedFeature):
     _: KW_ONLY
     prominence: float
     visibility_radius: Optional[float] = None
-    _avg_slope: float = 15.0  # store internally
+    _avg_slope: float = field(default=15.0, init=False)  # Store internally
 
     @property
     def curvature_type(self) -> CurvatureType:
@@ -321,64 +321,63 @@ class PeakFeature(ClassifiedFeature):
         x, y = self.centroid
         return abs(pixel[0] - x) < 3 and abs(pixel[1] - y) < 3
 
-
 @dataclass  
 class RidgeFeature(ClassifiedFeature):
     """Linear convex feature connecting peaks."""
     _: KW_ONLY
-    spine_points: List[PixelCoord]
-    connected_peaks: Set[str]
-    _avg_slope: float = 10.0  # store internally
-
+    spine_points: List[PixelCoord]    # Polyline defining ridge crest
+    connected_peaks: Set[str]         # Feature IDs of connected peaks
+    _avg_slope: float = field(default=10.0, init=False)  # Add this
+    
     @property
     def curvature_type(self) -> CurvatureType:
         return CurvatureType.CONVEX
-
+    
     @property
-    def avg_slope(self) -> float:
+    def avg_slope(self) -> float:  # Add this
         return self._avg_slope
-
-    def is_traversable(self, config: PipelineConfig) -> Traversability:
+    
+    def is_traversable(self, config: PipelineConfig) -> Traversability:  # Add this
         return config.is_traversable(self.avg_slope)
-
+    
     def contains_point(self, pixel: PixelCoord) -> bool:
+        """Check if point is within 3 pixels of ridge spine (Manhattan distance)."""
         if not self.spine_points:
             return False
         distances = [abs(pixel[0] - x) + abs(pixel[1] - y)
                      for x, y in self.spine_points]
         return min(distances) < 3
-
-
+        
 @dataclass
 class ValleyFeature(ClassifiedFeature):
     """Local minimum with concave surroundings."""
     _: KW_ONLY
     spine_points: List[PixelCoord] = field(default_factory=list)
     drainage_area: Optional[float] = None
-    _avg_slope: float = 10.0  # store internally
-
+    
     @property
     def curvature_type(self) -> CurvatureType:
         return CurvatureType.CONCAVE
-
+    
     @property
     def avg_slope(self) -> float:
-        return self._avg_slope
-
+        return float(self.metadata.get('avg_slope', 10.0))
+    
     def is_traversable(self, config: 'PipelineConfig') -> Traversability:
+        # Valleys are often wet/difficult, so add penalty
         base = config.is_traversable(self.avg_slope)
         if base == Traversability.FREE:
-            return Traversability.DIFFICULT
+            return Traversability.DIFFICULT  # Valleys default to difficult
         return base
-
+    
     def contains_point(self, pixel: PixelCoord) -> bool:
+        """Check if point is within 5 pixels of valley spine."""
         if not self.spine_points:
             return False
         distances = [np.sqrt((pixel[0]-x)**2 + (pixel[1]-y)**2) 
                     for x, y in self.spine_points]
         return min(distances) < 5
-
-
+        
 @dataclass
 class SaddleFeature(ClassifiedFeature):
     """Pass connecting ridges/valleys."""
@@ -386,22 +385,23 @@ class SaddleFeature(ClassifiedFeature):
     elevation: float = 0.0
     connecting_ridges: Set[str] = field(default_factory=set)
     connecting_valleys: Set[str] = field(default_factory=set)
-    k_curvature: Optional[float] = None
-    _avg_slope: float = 10.0  # store internally
-
+    k_curvature: Optional[float] = None  # Gaussian curvature magnitude
+    
     @property
     def curvature_type(self) -> CurvatureType:
         return CurvatureType.SADDLE
-
+    
     @property
     def avg_slope(self) -> float:
-        return self._avg_slope
-
+        return float(self.metadata.get('avg_slope', 10.0))
+    
     def is_traversable(self, config: 'PipelineConfig') -> Traversability:
+        # Saddles are natural passes, often traversable
         return config.is_traversable(self.avg_slope)
-
+    
     def contains_point(self, pixel: PixelCoord) -> bool:
         x, y = self.centroid
+        # Saddle points are localized
         return abs(pixel[0] - x) < 3 and abs(pixel[1] - y) < 3
 
 
@@ -412,24 +412,25 @@ class FlatZoneFeature(ClassifiedFeature):
     area_pixels: int = 0
     max_slope: float = 0.0
     min_slope: float = 0.0
-    _avg_slope: float = 0.0  # store internally
-
+    
     @property
     def curvature_type(self) -> CurvatureType:
         return CurvatureType.FLAT
-
+    
     @property
     def avg_slope(self) -> float:
-        return self._avg_slope
-
+        return float(self.metadata.get('avg_slope', 0.0))
+    
     def is_traversable(self, config: 'PipelineConfig') -> Traversability:
+        # Flat zones are ideal for travel
         if self.max_slope < config.vehicle_climb_angle:
             return Traversability.FREE
         elif self.max_slope < config.cliff_threshold_degrees:
             return Traversability.DIFFICULT
         return Traversability.BLOCKED
-
+    
     def contains_point(self, pixel: PixelCoord) -> bool:
+        # Flat zones are large areas - use bounding box
         if 'bounds' not in self.metadata:
             return False
         x, y = pixel
@@ -548,11 +549,6 @@ class Pipeline:
                 
         raise RuntimeError("Pipeline has no return object [AnalyzedTerrain]")
         
- 
-
-    
-
-
 #
 #  Finalizing to an analyzed terrain object
 #  
@@ -585,6 +581,7 @@ class AnalyzedTerrain:
     connectivity_graph: Dict[str, Set[str]] = field(default_factory=dict) # feature_id → adjacent traversable feature_ids
     watersheds: Dict[str, Set[str]] = field(default_factory=dict)         # basin_id → member feature_ids
     flow_accumulation: Optional[ScalarField] = None                       # per-pixel upstream area (pixels²)
+    semantic_index: Dict[str, Any] = field(default_factory=dict)           # tactical index built by Layer 5
     
     # Query interface
     def find_by_type(self, feature_type: type) -> List[ClassifiedFeature]:
@@ -613,3 +610,14 @@ class AnalyzedTerrain:
           )
         """
         pass
+        
+@dataclass(frozen=True)
+class ScaledTransform:
+    """Serializable pixel → world coordinate transform."""
+    scale: float
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+
+    def __call__(self, pixel: PixelCoord) -> WorldCoord:
+        return (pixel[0] * self.scale + self.offset_x,
+                pixel[1] * self.scale + self.offset_y)

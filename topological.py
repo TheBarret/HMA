@@ -31,12 +31,15 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
     
     def __init__(self, config: PipelineConfig):
         super().__init__(config)
-        self._min_feature_size = 5
-        self._min_ridge_length = 10
-        self._ridge_width = 3
-        self._saddle_confidence_threshold = 0.3
-        self._peak_confidence_threshold = 0.1  # lower threshold for peaks
-        self._valley_confidence_threshold = 0.15  # separate for valleys
+        self._min_feature_size = 5          # Minimum pixels for a feature
+        self._min_ridge_length = 10          # Minimum ridge length in pixels
+        self._ridge_width = 3                # Expected ridge width in pixels
+        self._saddle_confidence_threshold = 0.1  # Top 30% by K magnitude
+        self._saddle_k_min_threshold = 5e-5  # Hard minimum |K| for saddle (noise floor)
+        # Derived from diagnostic: |K| > 5e-5 retains ~20% of saddle pixels (real features)
+        # |K| < 5e-5 is indistinguishable from flat-terrain numerical noise on gentle maps
+        self._border_margin = 10             # Ignore features within N pixels of image edge
+        # Edge pixels have extreme curvature artifacts from Gaussian blur reflect boundary
         
     def execute(self, input_data: Dict) -> List[TerrainFeature]:
         """
@@ -128,13 +131,13 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         return confidence
     
     def _extract_peaks(self, heightmap: Heightmap, curvature_type: np.ndarray,
-                   gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
-                   mean_curvature: np.ndarray, slope: Optional[np.ndarray]) -> List[PeakFeature]:
+                       gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
+                       mean_curvature: np.ndarray, slope: Optional[np.ndarray]) -> List[PeakFeature]:
         """Extract peaks from convex regions with high K confidence."""
         z = heightmap.data
         peaks = []
         
-        # Mask: convex regions
+        # Mask: convex regions with positive Gaussian curvature
         convex_mask = (curvature_type == "CONVEX")
         
         # Refine: only pixels with K > 0 (true convex)
@@ -142,21 +145,13 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         convex_mask = convex_mask & k_positive
         
         # Find local maxima (pixel higher than 8 neighbors)
-        # allows plateaus
-        #local_max = (z >= maximum_filter(z, size=3))
-
-        # for gentler terrain
-        #local_max = (z == maximum_filter(z, size=5))
-
-        # or combine
-        local_max = (z >= maximum_filter(z, size=2))
+        local_max = (z == maximum_filter(z, size=3))
         
-        
-        # Combine masks
+        # Combine: convex region, positive K, AND local maximum
         peak_mask = convex_mask & local_max
         
-        # Apply PEAK-SPECIFIC confidence threshold (lower than saddle threshold)
-        high_confidence = k_confidence > self._peak_confidence_threshold
+        # Apply confidence threshold (only high-confidence peaks)
+        high_confidence = k_confidence > self._saddle_confidence_threshold
         peak_mask = peak_mask & high_confidence
         
         # Label connected components
@@ -168,16 +163,25 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             if size < self._min_feature_size:
                 continue
                 
+            # Find centroid (highest point)
             ys, xs = np.where(mask)
             elevations = z[mask]
             highest_idx = np.argmax(elevations)
             centroid_px = (xs[highest_idx], ys[highest_idx])
             
+            # Get elevation stats
             elevation_range = (np.min(z[mask]), np.max(z[mask]))
+            
+            # Calculate prominence
             prominence = self._calculate_prominence(heightmap, centroid_px)
+            
+            # Calculate average slope
             avg_slope = np.mean(slope[mask]) if slope is not None else 15.0
+            
+            # Average confidence for this peak
             avg_confidence = np.mean(k_confidence[mask])
             
+            # Estimate width from curvature magnitude
             h_peak = mean_curvature[centroid_px[1], centroid_px[0]]
             k_peak = gaussian_curvature[centroid_px[1], centroid_px[0]]
             
@@ -185,7 +189,8 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 centroid=centroid_px,
                 elevation_range=elevation_range,
                 prominence=prominence,
-                _avg_slope=float(avg_slope),
+                _avg_slope=float(avg_slope), 
+                avg_slope=avg_slope,
                 metadata={
                     'size': size,
                     'elevation': float(z[centroid_px[1], centroid_px[0]]),
@@ -195,14 +200,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 }
             )
             peaks.append(peak)
-        
-        # DEBUG: Log filter stage counts
-        print(f"\nPeak data:")
-        print(f"  CONVEX pixels: {np.sum(curvature_type == 'CONVEX')}")
-        print(f"  After K>0 filter: {np.sum(convex_mask & (gaussian_curvature > 0))}")
-        print(f"  After local_max filter: {np.sum(convex_mask & local_max)}")
-        print(f"  After confidence filter: {np.sum(peak_mask)}")
-        print(f"  Connected components ≥5px: {num_features}")
         
         return peaks
     
@@ -264,7 +261,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 elevation_range=elevation_range,
                 spine_points=spine_points,
                 connected_peaks=connected_peaks,
-                _avg_slope=float(avg_slope),  # internal field
                 metadata={
                     'length': len(spine_points),
                     'width_meters': float(width_meters),
@@ -318,7 +314,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 elevation_range=elevation_range,
                 spine_points=spine_points,
                 drainage_area=drainage_area,
-                _avg_slope=float(avg_slope),
                 metadata={
                     'length': len(spine_points),
                     'confidence': float(avg_confidence),
@@ -330,36 +325,46 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         
         return valleys
 
+
     def _extract_saddles(self, heightmap: Heightmap, curvature_type: np.ndarray,
-                     gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
-                     mean_curvature: np.ndarray, slope: Optional[np.ndarray]) -> List[SaddleFeature]:
-        """Extract saddle points with stronger noise filtering."""
+                         gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
+                         mean_curvature: np.ndarray, slope: Optional[np.ndarray]) -> List[SaddleFeature]:
+        """
+        Extract saddle points where K < 0.
+
+        Two-stage filtering:
+        1. Hard minimum |K| threshold — rejects numerical noise on flat terrain.
+           The confidence weight alone is insufficient because on gentle maps the
+           90th-percentile anchor is itself tiny, making 0.3 × anchor ≈ noise floor.
+        2. Border margin — edge pixels always have extreme curvature artifacts from
+           the Gaussian blur reflect boundary and must be excluded.
+        """
         z = heightmap.data
+        h, w = z.shape
+        m = self._border_margin
         saddles = []
-        
-        # Mask: saddle points from curvature classification
-        #saddle_mask = (curvature_type == "SADDLE")
-        saddle_mask = (curvature_type == "SADDLE") & (gaussian_curvature < 0)
-        
-        # Absolute |K| threshold for FEATURE extraction
-        # filter: discard all topologically insignificant ones
-        k_feature_threshold = 5e-4  # modify for 1e-4 to 1e-3 based on terrain
-        strong_k = np.abs(gaussian_curvature) > k_feature_threshold
-        saddle_mask = saddle_mask & strong_k
-        
-        # Apply confidence threshold (relative to strong saddles only)
+
+        # Mask: classified SADDLE with negative K AND above hard noise floor
+        saddle_mask = (
+            (curvature_type == "SADDLE") &
+            (gaussian_curvature < 0) &
+            (np.abs(gaussian_curvature) > self._saddle_k_min_threshold)
+        )
+
+        # Strip border pixels — reflect padding creates false curvature spikes at edges
+        border = np.zeros_like(saddle_mask)
+        border[m:h-m, m:w-m] = True
+        saddle_mask = saddle_mask & border
+
+        # Additional: confidence filter on top of hard threshold
         confident_saddle = k_confidence > self._saddle_confidence_threshold
         saddle_mask = saddle_mask & confident_saddle
-        
-        print(f"  Saddle mask after filtering: {np.sum(saddle_mask)} pixels")
-        
-        # Label connected components
+
         labeled, num_features = label(saddle_mask)
         
         for i in range(1, num_features + 1):
             mask = (labeled == i)
-            size = np.sum(mask)
-            if size < 3:  # Minimum 3 pixels for a saddle region
+            if np.sum(mask) < 3:
                 continue
                 
             ys, xs = np.where(mask)
@@ -369,9 +374,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             k_value = gaussian_curvature[centroid_px[1], centroid_px[0]]
             h_value = mean_curvature[centroid_px[1], centroid_px[0]]
             
-            # Calculate average slope for this saddle region
-            avg_slope = np.mean(slope[ys, xs]) if slope is not None else 10.0
-            
+            # Find connecting features (will be populated in Layer 4)
             connections = self._find_saddle_connections(heightmap, centroid_px)
             
             saddle = SaddleFeature(
@@ -381,12 +384,11 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 connecting_ridges=connections['ridges'],
                 connecting_valleys=connections['valleys'],
                 k_curvature=float(k_value),
-                _avg_slope=float(avg_slope),
                 metadata={
-                    'size': size,
+                    'size': int(np.sum(mask)),
                     'mean_curvature': float(h_value),
                     'confidence': float(abs(k_value)),
-                    'avg_slope': float(avg_slope)
+                    'avg_slope': float(slope[centroid_px[1], centroid_px[0]]) if slope is not None else 10.0
                 }
             )
             saddles.append(saddle)
@@ -443,7 +445,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 area_pixels=size,
                 max_slope=max_slope,
                 min_slope=min_slope,
-                _avg_slope=float(avg_slope),
                 metadata={
                     'size': size,
                     'area_m2': size * (cell_size ** 2),

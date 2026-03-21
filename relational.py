@@ -38,8 +38,11 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
     
     def __init__(self, config: PipelineConfig):
         super().__init__(config)
-        self._viewshed_sample_step = 5  # Sample every 5th pixel for performance
-        self._connection_radius_m = 200  # Max distance for connectivity (meters)
+        self._viewshed_sample_step = 5   # Sample every 5th pixel for performance
+        self._connection_radius_m = 200   # Max distance for connectivity (meters)
+        self._visibility_max_range_m = 1500  # Hard cap on visibility check distance
+        # Without a range cap, O(F²) Bresenham walks across the full map stall indefinitely.
+        # 1500m covers most tactical engagement ranges and keeps pair count manageable.
         
     def execute(self, input_data: LayerBundle) -> Dict[str, any]:
         """
@@ -131,13 +134,24 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         
         important_ids = {f.feature_id for f in important_features}
         
+        # Pre-compute max range in pixels for fast distance rejection
+        max_range_px = self._visibility_max_range_m / heightmap.config.horizontal_scale
+
         # Check visibility between each pair of important features
+        # Distance pre-filter eliminates the vast majority of pairs before
+        # the expensive pixel-by-pixel Bresenham walk even begins.
         n = len(important_features)
         for i in range(n):
             for j in range(i + 1, n):
                 f1 = important_features[i]
                 f2 = important_features[j]
-                
+
+                # Fast Euclidean distance reject — skip pairs beyond max range
+                dx = f1.centroid[0] - f2.centroid[0]
+                dy = f1.centroid[1] - f2.centroid[1]
+                if (dx*dx + dy*dy) > max_range_px * max_range_px:
+                    continue
+
                 if self._check_visibility(f1.centroid, f2.centroid, heightmap):
                     visibility[f1.feature_id].add(f2.feature_id)
                     visibility[f2.feature_id].add(f1.feature_id)
