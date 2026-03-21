@@ -503,7 +503,8 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             sorted_def = sorted(defensive, key=lambda p: p.metadata.get('defensive_score', 0), reverse=True)
             for p in sorted_def[:5]:
                 score = p.metadata.get('defensive_score', 0)
-                print(f"  • {p.centroid}: {p.prominence:.1f}m prominence, score={score:.2f}")
+                cx, cy = int(p.centroid[0]), int(p.centroid[1])
+                print(f"  • ({cx}, {cy}): {p.prominence:.1f}m prominence, score={score:.2f}")
     
     @property
     def output_schema(self) -> dict:

@@ -422,70 +422,118 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                          gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
                          mean_curvature: np.ndarray, slope: Optional[np.ndarray]) -> List[SaddleFeature]:
         """
-        Extract saddle points where K < 0.
+        Extract saddle points as topographic passes between peaks.
 
-        Two-stage filtering:
-        1. Hard minimum |K| threshold — rejects numerical noise on flat terrain.
-           The confidence weight alone is insufficient because on gentle maps the
-           90th-percentile anchor is itself tiny, making 0.3 × anchor ≈ noise floor.
-        2. Border margin — edge pixels always have extreme curvature artifacts from
-           the Gaussian blur reflect boundary and must be excluded.
+        A saddle is a local elevation minimum that sits between higher terrain on
+        at least two sides. The key filters that prevent coastline false-positives:
+        1. Elevation gate: must be above the map's meaningful terrain floor
+           (excludes sea pixels whose elevation ≈ 0)
+        2. Higher-terrain check: at least two opposing quadrants around the candidate
+           must contain pixels higher than the candidate (confirms pass geometry)
+        3. NMS: suppress duplicates within peak_nms_radius_px
         """
+        from scipy.ndimage import minimum_filter, maximum_filter
+        from scipy.spatial import KDTree
+
         z = heightmap.data
         h, w = z.shape
         m = self._border_margin
+        cell_size = heightmap.config.horizontal_scale
         saddles = []
 
-        # Mask: classified SADDLE with negative K AND above hard noise floor
-        saddle_mask = (
-            (curvature_type == "SADDLE") &
-            (gaussian_curvature < 0) &
-            (np.abs(gaussian_curvature) > self._saddle_k_min_threshold)
-        )
+        # Smooth for stable local minima
+        z_smooth = ndimage.gaussian_filter(z.astype(np.float32), sigma=2.0)
 
-        # Strip border pixels — reflect padding creates false curvature spikes at edges
-        border = np.zeros_like(saddle_mask)
+        # Local minima in a terrain-scale window
+        window = max(5, int(10 / cell_size))
+        local_min_mask = (z_smooth == minimum_filter(z_smooth, size=window))
+        local_max_mask = (z_smooth == maximum_filter(z_smooth, size=window))
+        local_min_mask = local_min_mask & ~local_max_mask
+
+        # Strip border
+        border = np.zeros_like(local_min_mask)
         border[m:h-m, m:w-m] = True
-        saddle_mask = saddle_mask & border
+        local_min_mask = local_min_mask & border
 
-        # Additional: confidence filter on top of hard threshold
-        confident_saddle = k_confidence > self._saddle_confidence_threshold
-        saddle_mask = saddle_mask & confident_saddle
+        # ── KEY GATE 1: elevation floor ──────────────────────────────────────
+        # Compute a meaningful terrain floor: use the Nth percentile of non-zero
+        # elevations. Sea pixels are 0 (or near-0); real saddles are above the coast.
+        nonzero_elevs = z[z > 0]
+        if len(nonzero_elevs) > 0:
+            elev_floor = float(np.percentile(nonzero_elevs, 10))  # bottom 10% of land
+        else:
+            elev_floor = 0.0
+        elev_floor = max(elev_floor, heightmap.config.sea_level_offset + 0.5)
+        local_min_mask = local_min_mask & (z_smooth > elev_floor)
 
-        labeled, num_features = label(saddle_mask)
-        print(f"_extract_saddles(): labeled regions={num_features}, min_size={self.config.min_saddle_size_px}")
+        candidate_ys, candidate_xs = np.where(local_min_mask)
+        print(f"_extract_saddles(): candidates after elev_floor({elev_floor:.2f}m)={len(candidate_xs)}, window={window}px")
 
-        for i in range(1, num_features + 1):
-            mask = (labeled == i)
-            if np.sum(mask) < self.config.min_saddle_size_px:
+        if len(candidate_xs) == 0:
+            return saddles
+
+        # ── KEY GATE 2: higher terrain on opposing sides ─────────────────────
+        # Sample 4 quadrant directions around each candidate (N/S and E/W).
+        # A real saddle has higher terrain in at least 2 opposing directions.
+        check_r = max(window, int(15 / cell_size))
+        valid_candidates = []
+
+        for cx, cy in zip(candidate_xs, candidate_ys):
+            elev_c = float(z_smooth[cy, cx])
+            # Sample mean elevation in each cardinal quadrant at check_r distance
+            samples = {
+                'N': z_smooth[max(0, cy - check_r): cy, cx],
+                'S': z_smooth[cy + 1: min(h, cy + check_r + 1), cx],
+                'E': z_smooth[cy, cx + 1: min(w, cx + check_r + 1)],
+                'W': z_smooth[cy, max(0, cx - check_r): cx],
+            }
+            # Count directions where terrain rises above the candidate
+            higher = sum(1 for arr in samples.values()
+                         if len(arr) > 0 and float(np.max(arr)) > elev_c + 0.2)
+            if higher >= 2:
+                valid_candidates.append((cx, cy))
+
+        print(f"_extract_saddles(): after higher-terrain check → {len(valid_candidates)}")
+
+        if not valid_candidates:
+            return saddles
+
+        # ── NMS: keep lowest elevation within each radius ────────────────────
+        vx = np.array([c[0] for c in valid_candidates])
+        vy = np.array([c[1] for c in valid_candidates])
+        coords = np.column_stack([vx, vy]).astype(np.float32)
+        elevs = z_smooth[vy, vx]
+        tree = KDTree(coords)
+
+        suppressed = np.zeros(len(vx), dtype=bool)
+        for idx in np.argsort(elevs):          # process lowest first
+            if suppressed[idx]:
                 continue
-                
-            ys, xs = np.where(mask)
-            centroid_px = (int(np.mean(xs)), int(np.mean(ys)))
-            
-            elevation = z[centroid_px[1], centroid_px[0]]
-            k_value = gaussian_curvature[centroid_px[1], centroid_px[0]]
-            h_value = mean_curvature[centroid_px[1], centroid_px[0]]
-            
-            # Find connecting features (will be populated in Layer 4)
-            connections = self._find_saddle_connections(heightmap, centroid_px)
-            
+            for nb in tree.query_ball_point(coords[idx], r=self.config.peak_nms_radius_px):
+                if nb != idx:
+                    suppressed[nb] = True
+
+        final_xs = vx[~suppressed]
+        final_ys = vy[~suppressed]
+        print(f"_extract_saddles(): after NMS (radius={self.config.peak_nms_radius_px}px) → {len(final_xs)} saddles")
+
+        for cx, cy in zip(final_xs, final_ys):
+            elevation = float(z[cy, cx])
             saddle = SaddleFeature(
-                centroid=centroid_px,
+                centroid=(int(cx), int(cy)),
                 elevation_range=(elevation, elevation),
                 elevation=elevation,
-                connecting_ridges=connections['ridges'],
-                connecting_valleys=connections['valleys'],
-                k_curvature=float(k_value),
+                connecting_ridges=set(),
+                connecting_valleys=set(),
+                k_curvature=float(gaussian_curvature[cy, cx]),
                 metadata={
-                    'size': int(np.sum(mask)),
-                    'mean_curvature': float(h_value),
-                    'confidence': float(abs(k_value)),
-                    'avg_slope': float(slope[centroid_px[1], centroid_px[0]]) if slope is not None else 10.0
+                    'mean_curvature': float(mean_curvature[cy, cx]),
+                    'confidence': float(abs(gaussian_curvature[cy, cx])),
+                    'avg_slope': float(slope[cy, cx]) if slope is not None else 10.0
                 }
             )
             saddles.append(saddle)
-        
+
         return saddles
 
 

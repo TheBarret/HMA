@@ -706,13 +706,6 @@ class GameScaling:
                 vertical_scale_m_per_unit=0.25,
                 vehicle_climb_angle_deg=25.0,
                 infantry_climb_angle_deg=45.0
-            ),
-            GameType.CUSTOM: cls(
-                game_type=game,
-                horizontal_scale_m_per_px=1.8,    # custom
-                vertical_scale_m_per_unit=0.12,
-                vehicle_climb_angle_deg=25.0,
-                infantry_climb_angle_deg=45.0
             )
         }
         return presets.get(game, presets[GameType.ARMA_3])
@@ -724,7 +717,7 @@ class PipelineConfig:
     # Layer 0: Calibration 
     horizontal_scale: float = 2.0
     vertical_scale: float = 0.2
-    sea_level_offset: float = 0.0
+    sea_level_offset: float = 10.0
     noise_reduction_sigma: float = 1.2
     
     # Layer 1: Gradient 
@@ -733,31 +726,26 @@ class PipelineConfig:
     
     # Layer 2: Curvature
     adaptive_epsilon: bool = True
-    # Fraction of the 95th-percentile signal anchor used as the classification threshold.
-    # 0.5 = classify pixels above 50% of the top-5% signal as features.
-    # Lower → more features detected. Higher → only strongest curvature classified.
-    curvature_epsilon_h_factor: float = 0.2
-    curvature_epsilon_k_factor: float = 0.2
+    curvature_epsilon_h_factor: float = 0.8      # 80% of std - less sensitive
+    curvature_epsilon_k_factor: float = 0.8      # 80% of std - less sensitive  
     curvature_epsilon_h_min: float = 1e-5
     curvature_epsilon_k_min: float = 1e-5
-    curvature_epsilon: float = 0.01  # static fallback (adaptive_epsilon=False)
+    curvature_epsilon: float = 0.01  # static fallback
     
     # Layer 3: Topology 
-    peak_annular_inner_m: float = 5.0    # Inner radius for annular validation (meters)
-    peak_annular_outer_m: float = 12.0   # Outer radius for annular validation (meters)
-    peak_confidence_threshold: float = 0.01  # Minimum confidence for peak detection (0-1)
-    min_peak_size_px: int = 1            # Min regional-maxima plateau pixels (1 = accept all; local_maxima produces 1px plateaus)
-    peak_min_prominence_m: float = 0.5   # Min prominence (meters) — the real quality gate for peaks
-    
-    min_ridge_length_px: int = 5
-    min_valley_length_px: int = 5
-    min_saddle_size_px: int = 50
-    min_flat_zone_size_px: int = 15
-    
+    peak_annular_inner_m: float = 5.0
+    peak_annular_outer_m: float = 12.0
+    peak_confidence_threshold: float = 0.01
+    min_peak_size_px: int = 1            # keep 1 — local_maxima returns 1px plateaus
+    peak_min_prominence_m: float = 2.0   # real quality gate for peaks (meters)
+    peak_nms_radius_px: int = 15         # suppress duplicate peaks within this radius
+    min_ridge_length_px: int = 6
+    min_valley_length_px: int = 6
+    min_saddle_size_px: int = 50         # unused now (topographic approach)
+    min_flat_zone_size_px: int = 50
     saddle_k_min_threshold: float = 5e-5
     saddle_confidence_threshold: float = 0.1
     flat_zone_slope_threshold_deg: float = 5.0
-    
     border_margin_px: int = 10
     prominence_search_radius_m: float = 100.0
     
@@ -776,7 +764,7 @@ class PipelineConfig:
     defensive_min_visibility: int = 5
     observation_min_prominence_m: float = 10.0
     observation_min_visibility: int = 10
-    assembly_min_area_m2: float = 1000.0 # 1000- 2000 m2
+    assembly_min_area_m2: float = 2000.0
     assembly_max_slope_deg: float = 5.0
     chokepoint_min_connectivity: int = 2
     cover_min_width_m: float = 5.0
