@@ -6,6 +6,8 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 <img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/6ebee271-a031-4f23-a516-372f85695341" />
 
+<img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/653bc92d-6f35-4d01-8fe9-0a7cae74d170" />
+
 ## The Analysis Pipeline
 
 ### Layer 0: Calibration (The Observable)
