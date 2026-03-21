@@ -4,16 +4,12 @@
 A heightmap is a 2.5D scalar field: perfect geometric surface information, zero information about what lies above, 
 below, or what the surface means. Analysis must proceed from fundamental mathematics to derived semantics.
 
-
-<img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/8cf37207-a334-4cb7-bfdd-1d0b91ba8411" />
+<img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/6ebee271-a031-4f23-a516-372f85695341" />
 
 ## The Analysis Pipeline
 
 ### Layer 0: Calibration (The Observable)
 *Before examining data, define the measurement context.*
-
-<img width="1491" height="1004" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/8b3ee309-08a5-4986-9298-6671aa23931d" />
-
 
 - **Input:** Raw grayscale image (0-255)
 - **Operations:**
@@ -25,9 +21,6 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 1: Local Geometry (First Derivatives)
 *How does the surface behave at this exact point?*
 
-<img width="2230" height="1482" alt="layer1_lgeometric_results" src="https://github.com/user-attachments/assets/ea9b2fd9-6eba-4976-a9ae-ec88dd5a0d1b" />
-
-
 - **Input:** Calibrated surface
 - **Operations:**
   - Calculate gradient magnitude → **Slope** (steepness)
@@ -37,9 +30,6 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 ### Layer 2: Regional Geometry (Second Derivatives)
 *What shape does the neighborhood form around this point?*
-
-<img width="2677" height="1841" alt="layer2_regional_geometry_results" src="https://github.com/user-attachments/assets/1e4b46e1-6d42-40c9-a294-3f9b54415260" />
-
 
 - **Input:** Gradient maps
 - **Operations:**
@@ -52,9 +42,6 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 3: Topological Features (Discrete Objects)
 *Where do continuous shapes resolve into identifiable structures?*
 
-<img width="2685" height="2064" alt="layer3_topological_features" src="https://github.com/user-attachments/assets/d61660bc-12a8-42af-9b4b-ccbbec90d005" />
-
-
 - **Input:** Elevation + Curvature maps
 - **Operations:**
   - Identify critical points: peaks (local maxima), pits (local minima), saddles
@@ -64,9 +51,6 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 ### Layer 4: Relational Analysis (Connectivity)
 *How do these features interact spatially?*
-
-<img width="2644" height="918" alt="layer4_relational_results" src="https://github.com/user-attachments/assets/a324c9cd-237c-48d7-a3f8-3dcc434ebf91" />
-
 
 - **Input:** Topological features + Slope + Aspect
 - **Operations:**
@@ -78,9 +62,6 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 ### Layer 5: Semantic Interpretation (Meaning)
 *What does this mean for an end user?*
-
-<img width="2251" height="2065" alt="layer5_semantic_results" src="https://github.com/user-attachments/assets/5413e1a1-675c-407b-b98f-e655c7bfb25f" />
-
 
 - **Input:** Relational data + domain thresholds
 - **Operations:**
@@ -95,7 +76,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ```
 Calibration → First Derivatives → Second Derivatives → Topology → Relations → Semantics
      ↓              ↓                   ↓                 ↓           ↓           ↓
-  Clean        Slope/Aspect        Curvature        Features     Networks    Meaning
+  Clean        Slope/Aspect         Curvature          Features    Networks     Meaning
 ```
 
 
