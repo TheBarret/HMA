@@ -64,6 +64,9 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 4: Relational Analysis (Connectivity)
 *How do these features interact spatially?*
 
+
+<img width="2635" height="910" alt="layer4_relational_results" src="https://github.com/user-attachments/assets/6791f990-abad-4c20-be3c-b35e6ab587a9" />
+
 - **Input:** Topological features + Slope + Aspect
 - **Operations:**
   - Calculate viewsheds (visibility from points)
