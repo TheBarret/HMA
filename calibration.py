@@ -15,32 +15,33 @@ import warnings
 from core import (
     Heightmap, 
     NormalizationConfig, 
+    RawImageInput, # (1)
     PixelCoord, 
     WorldCoord,
     PipelineConfig,
     ScalarField
 )
 
-
-@dataclass
-class RawImageInput:
-    """
-    Container for raw input data before calibration.
-    
-    Allows for flexible input sources while maintaining type safety.
-    """
-    data: np.ndarray  # 2D array of uint8 (0-255) grayscale values
-    metadata: Optional[dict] = None  # Optional: georeferencing, units, etc.
-    
-    def validate(self) -> bool:
-        """Validate input data format."""
-        if not isinstance(self.data, np.ndarray):
-            return False
-        if self.data.ndim != 2:
-            return False
-        if self.data.dtype != np.uint8:
-            return False
-        return True
+# (1) MOVED TO: CORE.PY
+#@dataclass
+#class RawImageInput:
+#    """
+#    Container for raw input data before calibration.
+#    
+#    Allows for flexible input sources while maintaining type safety.
+#    """
+#    data: np.ndarray  # 2D array of uint8 (0-255) grayscale values
+#    metadata: Optional[dict] = None  # Optional: georeferencing, units, etc.
+#    
+#    def validate(self) -> bool:
+#        """Validate input data format."""
+#        if not isinstance(self.data, np.ndarray):
+#            return False
+#        if self.data.ndim != 2:
+#            return False
+#        if self.data.dtype != np.uint8:
+#            return False
+#        return True
 
 
 class Layer0_Calibration:

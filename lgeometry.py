@@ -100,11 +100,11 @@ class Layer1_LocalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         """
         # Check slope range
         if np.any(slope < 0):
-            warnings.warn("Negative slope values detected, clipping to 0")
+            print("Negative slope values detected, clipping to 0")
             slope = np.clip(slope, 0, 90)
         
         if np.any(slope > 90):
-            warnings.warn(f"Slope > 90° detected (max: {np.max(slope):.2f}°), clipping")
+            print(f"Slope > 90° detected (max: {np.max(slope):.2f}°), clipping")
             slope = np.clip(slope, 0, 90)
         
         # Handle flat areas where aspect is undefined
@@ -121,7 +121,7 @@ class Layer1_LocalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         
         # Validate aspect range
         if np.any(aspect < 0) or np.any(aspect > 2 * np.pi):
-            warnings.warn("Aspect values outside [0, 2π], normalizing")
+            print("Aspect values outside [0, 2π], normalizing")
             aspect = aspect % (2 * np.pi)
         
         # Check for NaN/Inf

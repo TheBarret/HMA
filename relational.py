@@ -20,7 +20,7 @@ from core import (
     Heightmap, ScalarField, PipelineConfig, PipelineLayer,
     TerrainFeature, ClassifiedFeature,
     PeakFeature, RidgeFeature, ValleyFeature, SaddleFeature, FlatZoneFeature,
-    PixelCoord, Traversability, LayerBundle
+    PixelCoord, Traversability, LayerBundle, GameType
 )
 
 
@@ -38,11 +38,12 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
     
     def __init__(self, config: PipelineConfig):
         super().__init__(config)
-        self._viewshed_sample_step = 5   # Sample every 5th pixel for performance
-        self._connection_radius_m = 200   # Max distance for connectivity (meters)
-        self._visibility_max_range_m = 1500  # Hard cap on visibility check distance
-        # Without a range cap, O(F²) Bresenham walks across the full map stall indefinitely.
-        # 1500m covers most tactical engagement ranges and keeps pair count manageable.
+        self.game_type = config.game_type
+        self._visibility_max_range_m = config.visibility_max_range_m
+        self._connection_radius_m = config.connection_radius_m
+        self._viewshed_sample_step = config.viewshed_sample_step_px
+        self._flow_step_px = config.flow_step_px
+        self._flow_neighbor_distance_px = config.flow_neighbor_distance_px
         
     def execute(self, input_data: LayerBundle) -> Dict[str, any]:
         """
@@ -125,14 +126,10 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
             centroids.append((x, y))
             feature_ids.append(f.feature_id)
         
-        # For performance, limit to peaks and saddles for initial implementation
-        # (Full visibility for all features can be expensive)
-        important_features = [
-            f for f in features 
-            if isinstance(f, (PeakFeature, SaddleFeature))
-        ]
-        
-        important_ids = {f.feature_id for f in important_features}
+        # Visibility is only meaningful between peaks — they are the observation/defensive
+        # nodes. Saddle-to-saddle LOS is not tactically useful and with 100s of saddles
+        # the O(n²) Bresenham cost dominates total pipeline time.
+        important_features = [f for f in features if isinstance(f, PeakFeature)]
         
         # Pre-compute max range in pixels for fast distance rejection
         max_range_px = self._visibility_max_range_m / heightmap.config.horizontal_scale
@@ -244,13 +241,13 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
             if 0 <= x < cols and 0 <= y < rows:
                 a = aspect[y, x]
                 # Flow direction vector
-                flow_x = x - np.sin(a) * 10  # 10px step
-                flow_y = y - np.cos(a) * 10
+                flow_x = x - np.sin(a) * self._flow_step_px
+                flow_y = y - np.cos(a) * self._flow_step_px
                 
                 # Find nearest feature in flow direction
                 distances, indices = kdtree.query([(flow_x, flow_y)])
                 
-                if distances[0] < 50:  # Within 50 pixels
+                if distances[0] < self._flow_neighbor_distance_px:
                     downstream_id = feature_ids[indices[0]]
                     if downstream_id != f.feature_id:
                         flow_network[f.feature_id].append(downstream_id)
@@ -296,7 +293,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
                 
                 other = features[idx]
                 
-                # Check if path is traversable
+                # Check if path is traversable using config vehicle limit
                 if self._is_path_traversable(f, other, heightmap, slope):
                     connectivity[f.feature_id].add(other.feature_id)
         
@@ -321,15 +318,30 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
     def _is_path_traversable(self, f1: TerrainFeature, f2: TerrainFeature,
                               heightmap: Heightmap, slope: np.ndarray) -> bool:
         """
-        Check if the straight-line path between features is traversable.
+        Check traversability using config vehicle climb angle.
         
         The path is traversable if all points along the line have slope
-        within vehicle limits.
+        within vehicle limits (from PipelineConfig).
         """
         x1, y1 = f1.centroid
         x2, y2 = f2.centroid
         
-        # Bresenham line algorithm
+        # If distance > max range, skip
+        dist_px = np.hypot(x2 - x1, y2 - y1)
+        max_range_px = self._connection_radius_m / heightmap.config.horizontal_scale
+        if dist_px > max_range_px:
+            return False
+        
+        # Get max slope from config (game-specific)
+        max_slope = self.config.vehicle_climb_angle
+        
+        # Check slope along path
+        return self._check_path_slope(x1, y1, x2, y2, slope, max_slope)
+
+    def _check_path_slope(self, x1: int, y1: int, x2: int, y2: int,
+                          slope: np.ndarray, max_slope: float) -> bool:
+        """Check if all points along line have slope <= max_slope."""
+        # Bresenham implementation
         dx = abs(x2 - x1)
         dy = abs(y2 - y1)
         sx = 1 if x1 < x2 else -1
@@ -337,13 +349,10 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         err = dx - dy
         
         x, y = x1, y1
-        
         while (x, y) != (x2, y2):
-            # Check slope at this point
             if 0 <= y < slope.shape[0] and 0 <= x < slope.shape[1]:
-                if slope[y, x] > self.config.vehicle_climb_angle:
-                    return False  # Too steep
-            
+                if slope[y, x] > max_slope:
+                    return False
             e2 = 2 * err
             if e2 > -dy:
                 err -= dy
@@ -351,7 +360,6 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
             if e2 < dx:
                 err += dx
                 y += sy
-        
         return True
     
     def _delineate_watersheds(self, features: List[TerrainFeature],

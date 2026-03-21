@@ -19,9 +19,13 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
     
     CURVATURE_LABELS = ["FLAT", "CONVEX", "CONCAVE", "SADDLE"]
     
-    def __init__(self, config: PipelineConfig, adaptive_epsilon: bool = False):
+    #def __init__(self, config: PipelineConfig, adaptive_epsilon: bool = False):
+    #    super().__init__(config)
+    #    self.adaptive_epsilon = adaptive_epsilon
+    #    self._epsilon_used: Optional[tuple[float, float]] = None
+    def __init__(self, config: PipelineConfig):
         super().__init__(config)
-        self.adaptive_epsilon = adaptive_epsilon
+        self.adaptive_epsilon = config.adaptive_epsilon  # Read from config
         self._epsilon_used: Optional[tuple[float, float]] = None
         
     def execute(self, input_data: Heightmap) -> Dict[str, ScalarField]:
@@ -119,23 +123,27 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
             return self._compute_adaptive_epsilon(H, K)
         else:
             eps = float(self.config.curvature_epsilon)
-            return eps, eps  # Same value, but returned as tuple for consistency
+            return eps, eps  # same value, but returned as tuple for consistency
 
     def _compute_adaptive_epsilon(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
-        """
-        Compute independent thresholds from each field's distribution.
-        
-        CRITICAL: H and K have different units and magnitudes!
-        - H: 1/m (typically 0.001 to 0.01)
-        - K: 1/m² (typically 0.00001 to 0.0001)
-        """
-        h_std = float(np.std(H[~np.isnan(H)]))
-        k_std = float(np.std(K[~np.isnan(K)]))
-        
-        # H-epsilon:
-        h_epsilon = max(0.1 * h_std, 1e-6)
-        k_epsilon = max(0.2 * k_std, 1e-5)  # floor at 1e-5 for classification
-        
+        H_valid = H[~np.isnan(H)]
+        K_valid = K[~np.isnan(K)]
+
+        # Use 95th percentile of |H| and |K| as the signal anchor.
+        # std() is dominated by the ~95% near-zero flat pixels on game maps,
+        # producing thresholds so small that noise gets classified as features.
+        # The 95th percentile sits in the actual feature signal, not the noise floor.
+        h_anchor = float(np.percentile(np.abs(H_valid), 95))
+        k_anchor = float(np.percentile(np.abs(K_valid), 95))
+
+        print(f"_compute_adaptive_epsilon(pre): H_p95={h_anchor:.6f}, K_p95={k_anchor:.6f}")
+
+        h_epsilon = max(self.config.curvature_epsilon_h_factor * h_anchor,
+                        self.config.curvature_epsilon_h_min)
+        k_epsilon = max(self.config.curvature_epsilon_k_factor * k_anchor,
+                        self.config.curvature_epsilon_k_min)
+
+        print(f"_compute_adaptive_epsilon(post): h_epsilon={h_epsilon:.6f}, k_epsilon={k_epsilon:.6f}")
         return h_epsilon, k_epsilon
     
     def _classify_curvature(
@@ -174,12 +182,11 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         non_flat = convex_count + concave_count + saddle_count
         if non_flat > 1000:
             print(
-                f"Curvature classification (H_ε={h_epsilon:.6f} 1/m, K_ε={k_epsilon:.6f} 1/m²): "
-                f"CONVEX={convex_count} ({100*convex_count/total:.1f}%), "
-                f"CONCAVE={concave_count} ({100*concave_count/total:.1f}%), "
-                f"SADDLE={saddle_count} ({100*saddle_count/total:.1f}%), "
-                f"FLAT={flat_count} ({100*flat_count/total:.1f}%)",
-                UserWarning
+                f"\nCurvature classification (H_ε={h_epsilon:.6f} 1/m, K_ε={k_epsilon:.6f} 1/m²): "
+                f"\nCONVEX={convex_count} ({100*convex_count/total:.1f}%), "
+                f"\nCONCAVE={concave_count} ({100*concave_count/total:.1f}%), "
+                f"\nSADDLE={saddle_count} ({100*saddle_count/total:.1f}%), "
+                f"\nFLAT={flat_count} ({100*flat_count/total:.1f}%)"
             )
     
     @property

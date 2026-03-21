@@ -31,15 +31,14 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
     
     def __init__(self, config: PipelineConfig):
         super().__init__(config)
-        self._min_feature_size = 5          # Minimum pixels for a feature
-        self._min_ridge_length = 10          # Minimum ridge length in pixels
-        self._ridge_width = 3                # Expected ridge width in pixels
-        self._saddle_confidence_threshold = 0.1  # Top 30% by K magnitude
-        self._saddle_k_min_threshold = 5e-5  # Hard minimum |K| for saddle (noise floor)
-        # Derived from diagnostic: |K| > 5e-5 retains ~20% of saddle pixels (real features)
-        # |K| < 5e-5 is indistinguishable from flat-terrain numerical noise on gentle maps
-        self._border_margin = 10             # Ignore features within N pixels of image edge
-        # Edge pixels have extreme curvature artifacts from Gaussian blur reflect boundary
+        self._min_feature_size = config.min_peak_size_px
+        self._min_ridge_length = config.min_ridge_length_px
+        self._ridge_width = config.min_ridge_length_px // 3
+        self._saddle_confidence_threshold = config.saddle_confidence_threshold
+        self._saddle_k_min_threshold = config.saddle_k_min_threshold
+        self._border_margin = config.border_margin_px
+        self._annular_inner_px = max(3, int(5 / config.horizontal_scale))
+        self._annular_outer_px = max(7, int(12 / config.horizontal_scale))
         
     def execute(self, input_data: Dict) -> List[TerrainFeature]:
         """
@@ -130,78 +129,167 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         
         return confidence
     
-    def _extract_peaks(self, heightmap: Heightmap, curvature_type: np.ndarray,
-                       gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
-                       mean_curvature: np.ndarray, slope: Optional[np.ndarray]) -> List[PeakFeature]:
-        """Extract peaks from convex regions with high K confidence."""
+    def _extract_peaks(self, heightmap, curvature_type, gaussian_curvature,
+                   k_confidence, mean_curvature, slope) -> List[PeakFeature]:
+        """
+        Extract peaks using regional maxima + annular curvature validation.
+        
+        Strategy:
+        1. Pre-smooth to reduce noise on gentle terrain
+        2. Find regional maxima (connected plateau components)
+        3. Validate each candidate by checking curvature in surrounding annulus
+        """
+        from skimage import morphology
+        from scipy import ndimage
+        
+        z = heightmap.data
+        cell_size = heightmap.config.horizontal_scale
+        peaks = []
+        
+        # 1. PRE-SMOOTHING (Critical for gentle terrain with 44m range)
+        # Sigma 1.5 balances noise reduction vs feature preservation
+        z_smooth = ndimage.gaussian_filter(z, sigma=1.5)
+        
+        # 2. CANDIDATE DETECTION: Regional Maxima (not pixel-wise)
+        # This collapses a plateau into a single candidate
+        regional_max_mask = morphology.local_maxima(z_smooth, connectivity=2)
+        labeled_peaks, num_candidates = ndimage.label(regional_max_mask)
+        
+        print(f"_extract_peaks(): regional maxima candidates={num_candidates}")
+        
+        if num_candidates == 0:
+            print("No regional maxima found, using elevation fallback...")
+            return self._extract_peaks_fallback(heightmap, slope)
+        
+        # 3. CURVATURE CALCULATION (for validation)
+        # Use smoothed data for stable derivatives
+        zy, zx = np.gradient(z_smooth, cell_size)
+        zxx, zxy = np.gradient(zx, cell_size)
+        zyx, zyy = np.gradient(zy, cell_size)
+        H = (zxx + zyy) / 2.0  # Mean curvature
+        
+        # 4. ANNULAR VALIDATION
+        # Create ring mask (annulus) for sampling curvature around peaks
+        ring_radius_inner = int(5 / cell_size)  # ~5m inner radius
+        ring_radius_outer = int(12 / cell_size)  # ~12m outer radius
+        ring_radius_inner = max(3, min(ring_radius_inner, 10))
+        ring_radius_outer = max(7, min(ring_radius_outer, 20))
+        
+        # Pre-compute ring coordinates relative to center
+        y_grid, x_grid = np.ogrid[:z.shape[0], :z.shape[1]]
+        center = np.array([z.shape[0] // 2, z.shape[1] // 2])
+        dist_from_center = np.sqrt((x_grid - center[1])**2 + (y_grid - center[0])**2)
+        ring_mask = (dist_from_center >= ring_radius_inner) & (dist_from_center <= ring_radius_outer)
+        ring_coords = np.argwhere(ring_mask)
+        
+        # Threshold for convex curvature (based on H_std from config)
+        h_threshold = self.config.curvature_epsilon_h_min * 10  # ~1e-4 for gentle terrain
+        
+        for i in range(1, num_candidates + 1):
+            # Get pixels belonging to this peak region
+            peak_pixels = np.argwhere(labeled_peaks == i)
+            if len(peak_pixels) < self._min_feature_size:
+                continue
+            
+            # Centroid of the plateau
+            centroid_y, centroid_x = peak_pixels.mean(axis=0).astype(int)
+            
+            # Extract curvature values in the ring around the centroid
+            ring_y = centroid_y + (ring_coords[:, 0] - center[0])
+            ring_x = centroid_x + (ring_coords[:, 1] - center[1])
+            
+            # Boundary check
+            valid = (ring_y >= 0) & (ring_y < z.shape[0]) & (ring_x >= 0) & (ring_x < z.shape[1])
+            if np.sum(valid) < 10:  # Skip edge peaks
+                continue
+            
+            sample_h = H[ring_y[valid], ring_x[valid]]
+            mean_h = np.mean(sample_h)
+            
+            # Criterion: Shoulder must be convex (H > threshold)
+            if mean_h > h_threshold:
+                # Calculate prominence and create peak
+                prominence = self._calculate_prominence(heightmap, (centroid_x, centroid_y))
+                if prominence > 1.0:
+                    # Create mask for this peak (the regional max region)
+                    mask = (labeled_peaks == i)
+                    peaks.append(self._create_peak_feature(
+                        heightmap, mask, (centroid_x, centroid_y), prominence,
+                        mean_curvature, gaussian_curvature, slope,
+                        method="curvature_annular"
+                    ))
+        
+        # 5. FALLBACK: If no peaks found, use elevation-based detection
+        if len(peaks) == 0:
+            print("No curvature-validated peaks detected, using elevation fallback...")
+            return self._extract_peaks_fallback(heightmap, slope)
+        
+        return peaks
+
+    def _extract_peaks_fallback(self, heightmap, slope) -> List[PeakFeature]:
+        """Elevation-based fallback for maps where curvature fails."""
         z = heightmap.data
         peaks = []
         
-        # Mask: convex regions with positive Gaussian curvature
-        convex_mask = (curvature_type == "CONVEX")
+        # Use larger window for game maps (7x7 instead of 3x3)
+        local_max_fallback = (z == ndimage.maximum_filter(z, size=7))
         
-        # Refine: only pixels with K > 0 (true convex)
-        k_positive = gaussian_curvature > 0
-        convex_mask = convex_mask & k_positive
+        # Exclude border pixels
+        border_mask = np.zeros_like(z, dtype=bool)
+        border_mask[self._border_margin:-self._border_margin, 
+                    self._border_margin:-self._border_margin] = True
+        local_max_fallback = local_max_fallback & border_mask
         
-        # Find local maxima (pixel higher than 8 neighbors)
-        local_max = (z == maximum_filter(z, size=3))
-        
-        # Combine: convex region, positive K, AND local maximum
-        peak_mask = convex_mask & local_max
-        
-        # Apply confidence threshold (only high-confidence peaks)
-        high_confidence = k_confidence > self._saddle_confidence_threshold
-        peak_mask = peak_mask & high_confidence
-        
-        # Label connected components
-        labeled, num_features = label(peak_mask)
+        labeled, num_features = ndimage.label(local_max_fallback)
         
         for i in range(1, num_features + 1):
             mask = (labeled == i)
-            size = np.sum(mask)
-            if size < self._min_feature_size:
+            if np.sum(mask) < self._min_feature_size * 2:
                 continue
                 
-            # Find centroid (highest point)
             ys, xs = np.where(mask)
-            elevations = z[mask]
-            highest_idx = np.argmax(elevations)
-            centroid_px = (xs[highest_idx], ys[highest_idx])
-            
-            # Get elevation stats
-            elevation_range = (np.min(z[mask]), np.max(z[mask]))
-            
-            # Calculate prominence
+            centroid_px = (int(np.mean(xs)), int(np.mean(ys)))
             prominence = self._calculate_prominence(heightmap, centroid_px)
             
-            # Calculate average slope
-            avg_slope = np.mean(slope[mask]) if slope is not None else 15.0
-            
-            # Average confidence for this peak
-            avg_confidence = np.mean(k_confidence[mask])
-            
-            # Estimate width from curvature magnitude
-            h_peak = mean_curvature[centroid_px[1], centroid_px[0]]
-            k_peak = gaussian_curvature[centroid_px[1], centroid_px[0]]
-            
-            peak = PeakFeature(
-                centroid=centroid_px,
-                elevation_range=elevation_range,
-                prominence=prominence,
-                _avg_slope=float(avg_slope), 
-                avg_slope=avg_slope,
-                metadata={
-                    'size': size,
-                    'elevation': float(z[centroid_px[1], centroid_px[0]]),
-                    'confidence': float(avg_confidence),
-                    'mean_curvature': float(h_peak),
-                    'gaussian_curvature': float(k_peak)
-                }
-            )
-            peaks.append(peak)
+            # Prominence threshold for game significance (3m = meaningful high ground)
+            if prominence > 3.0:
+                peaks.append(self._create_peak_feature(
+                    heightmap, mask, centroid_px, prominence,
+                    None, None, slope,
+                    method="elevation_fallback"
+                ))
         
         return peaks
+
+    def _create_peak_feature(self, heightmap, mask, centroid_px, prominence,
+                             mean_curvature, gaussian_curvature, slope, method="curvature"):
+        """Helper to create a PeakFeature with consistent metadata."""
+        z = heightmap.data
+        x, y = centroid_px
+        elevation = float(z[y, x])
+        
+        # Calculate defensive rating based on prominence and slope
+        # For game maps: high prominence + moderate slope = good defensive position
+        avg_slope = np.mean(slope[mask]) if slope is not None else 10.0
+        defensive_rating = min(1.0, (prominence / 15.0) * (1 - abs(avg_slope - 15) / 30))
+        
+        peak = PeakFeature(
+            centroid=centroid_px,
+            elevation_range=(float(np.min(z[mask])), elevation),
+            prominence=prominence,
+            #avg_slope=float(avg_slope),  see __init__ signature flag
+            metadata={
+                'size': int(np.sum(mask)),
+                'elevation': elevation,
+                'confidence': float(prominence / 20.0),  # Confidence based on prominence
+                'defensive_rating': defensive_rating,
+                'detection_method': method,
+                'mean_curvature': float(mean_curvature[y, x]) if mean_curvature is not None else 0,
+                'gaussian_curvature': float(gaussian_curvature[y, x]) if gaussian_curvature is not None else 0
+            }
+        )
+        peak._avg_slope = float(avg_slope) # store slope
+        return peak
     
     def _extract_ridges(self, heightmap: Heightmap, curvature_type: np.ndarray,
                         gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
@@ -261,6 +349,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 elevation_range=elevation_range,
                 spine_points=spine_points,
                 connected_peaks=connected_peaks,
+                #_avg_slope=float(avg_slope),
                 metadata={
                     'length': len(spine_points),
                     'width_meters': float(width_meters),
@@ -268,6 +357,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                     'avg_curvature': float(avg_curvature)
                 }
             )
+            ridge._avg_slope = float(avg_slope) # store slope
             ridges.append(ridge)
         
         return ridges
@@ -314,6 +404,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 elevation_range=elevation_range,
                 spine_points=spine_points,
                 drainage_area=drainage_area,
+                #_avg_slope=float(avg_slope),
                 metadata={
                     'length': len(spine_points),
                     'confidence': float(avg_confidence),
@@ -321,6 +412,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                     'avg_curvature': float(np.mean(mean_curvature[ys, xs]))
                 }
             )
+            valley._avg_slope = float(avg_slope) # store slope
             valleys.append(valley)
         
         return valleys
@@ -361,10 +453,11 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         saddle_mask = saddle_mask & confident_saddle
 
         labeled, num_features = label(saddle_mask)
-        
+        print(f"_extract_saddles(): labeled regions={num_features}, min_size={self.config.min_saddle_size_px}")
+
         for i in range(1, num_features + 1):
             mask = (labeled == i)
-            if np.sum(mask) < 3:
+            if np.sum(mask) < self.config.min_saddle_size_px:
                 continue
                 
             ys, xs = np.where(mask)
