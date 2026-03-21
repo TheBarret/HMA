@@ -361,12 +361,3 @@ class AffineTransform:
         return (self.a * x + self.b * y + self.tx,
                 self.c * x + self.d * y + self.ty)
 
-from core import (
-    Heightmap, 
-    NormalizationConfig, 
-    PixelCoord, 
-    WorldCoord,
-    PipelineConfig,
-    ScalarField
-)
-
