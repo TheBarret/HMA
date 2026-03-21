@@ -706,6 +706,13 @@ class GameScaling:
                 vertical_scale_m_per_unit=0.25,
                 vehicle_climb_angle_deg=25.0,
                 infantry_climb_angle_deg=45.0
+            ),
+            GameType.CUSTOM: cls(
+                game_type=game,
+                horizontal_scale_m_per_px=1.8,    # custom
+                vertical_scale_m_per_unit=0.12,
+                vehicle_climb_angle_deg=25.0,
+                infantry_climb_angle_deg=45.0
             )
         }
         return presets.get(game, presets[GameType.ARMA_3])
