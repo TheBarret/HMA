@@ -4,8 +4,17 @@
 A heightmap is a 2.5D scalar field: perfect geometric surface information, zero information about what lies above, 
 below, or what the surface means. Analysis must proceed from fundamental mathematics to derived semantics.
 
-<img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/6ebee271-a031-4f23-a516-372f85695341" />
+## Input
+<img width="715" height="515" alt="heightmap" src="https://github.com/user-attachments/assets/389fef25-d30a-423a-9a26-efbcce78c48e" />
 
+## Dependency Chain
+```
+Calibration → First Derivatives → Second Derivatives → Topology → Relations → Semantics
+     ↓              ↓                   ↓                 ↓           ↓           ↓
+  Clean        Slope/Aspect         Curvature          Features    Networks     Meaning
+```
+
+## Output
 <img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/653bc92d-6f35-4d01-8fe9-0a7cae74d170" />
 
 ## The Analysis Pipeline
@@ -72,14 +81,6 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
   - Apply domain-specific rules
 - **Rationale:** A chokepoint = two steep ridges + narrow flat valley. Requires all previous layers to define.
 - **Output:** Domain-classified terrain (tactical map, accessibility zones)
-
-
-## Dependency Chain
-```
-Calibration → First Derivatives → Second Derivatives → Topology → Relations → Semantics
-     ↓              ↓                   ↓                 ↓           ↓           ↓
-  Clean        Slope/Aspect         Curvature          Features    Networks     Meaning
-```
 
 
 ## Scale-Space Framework
