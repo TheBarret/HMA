@@ -117,7 +117,6 @@ class Layer1_LocalGeometry(PipelineLayer[Dict[str, ScalarField]]):
             # Optional: Log count of flat pixels
             flat_pct = 100 * np.sum(flat_mask) / flat_mask.size
             if flat_pct > 10:  # More than 10% flat
-                #warnings.warn()
                 print(f"Large flat area detected: {flat_pct:.1f}% of map")
         
         # Validate aspect range

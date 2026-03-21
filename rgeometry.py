@@ -1,423 +1,471 @@
 """
 Layer 2: Regional Geometry Module
 
-Computes second derivatives (curvature) from calibrated heightmap.
-Critical for identifying ridges, valleys, and saddles.
 """
 
 import numpy as np
 from scipy import ndimage
-from typing import Dict
+import matplotlib.pyplot as plt
+from typing import Dict, Tuple, Optional
 import warnings
 
 from core import Heightmap, ScalarField, PipelineConfig, PipelineLayer
 
-## HELPERS
-
-def compute_adaptive_epsilon(curvature: ScalarField, method='percentile') -> float:
-    """
-    Automatically determine optimal curvature epsilon based on data distribution.
-    
-    Args:
-        curvature: Mean curvature field
-        method: 'percentile', 'std', or 'mad' (median absolute deviation)
-    
-    Returns:
-        Adaptive epsilon value
-    """
-    # Flatten and remove outliers for robust statistics
-    c_flat = curvature.flatten()
-    c_flat = c_flat[~np.isnan(c_flat)]
-    
-    if method == 'percentile':
-        # Use 10th percentile of absolute curvature values
-        # This captures meaningful curvature while ignoring noise
-        epsilon = np.percentile(np.abs(c_flat), 10)
-        
-    elif method == 'std':
-        # Use 0.5 * standard deviation (common in geomorphometry)
-        epsilon = 0.5 * np.std(c_flat)
-        
-    elif method == 'mad':
-        # Median Absolute Deviation - robust to outliers
-        median = np.median(c_flat)
-        mad = np.median(np.abs(c_flat - median))
-        epsilon = 0.6745 * mad  # Convert to standard deviation equivalent
-        
-    else:
-        raise ValueError(f"Unknown method: {method}")
-    
-    # Ensure epsilon is reasonable
-    epsilon = max(epsilon, 1e-6)  # Never go below 1e-6
-    
-    return epsilon
-
-
-def find_curvature_elbow(curvature: ScalarField) -> float:
-    """
-    Find the elbow point in curvature histogram for automatic threshold.
-    Uses the Kneedle algorithm concept.
-    """
-    c_flat = np.abs(curvature.flatten())
-    c_flat = c_flat[~np.isnan(c_flat)]
-    
-    # Create histogram
-    hist, bin_edges = np.histogram(c_flat, bins=100)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-    
-    # Normalize
-    hist = hist / hist.max()
-    
-    # Find elbow (point of maximum curvature in the cumulative distribution)
-    # This separates noise from signal
-    cumulative = np.cumsum(hist) / np.sum(hist)
-    
-    # Find where cumulative distribution deviates from linear
-    x = np.linspace(0, 1, len(cumulative))
-    diff = cumulative - x
-    
-    # Elbow is where difference is maximum
-    elbow_idx = np.argmax(diff)
-    epsilon = bin_centers[elbow_idx]
-    
-    return epsilon
-
-def compute_multiscale_epsilon(heightmap: Heightmap, config: PipelineConfig) -> float:
-    """
-    Compute epsilon by analyzing curvature at multiple scales.
-    Real features persist across scales, noise doesn't.
-    """
-    z = heightmap.data
-    cell_size = heightmap.config.horizontal_scale
-    
-    epsilons = []
-    
-    for scale_name, radius in config.analysis_scales.items():
-        # Blur at this scale
-        z_scaled = ndimage.gaussian_filter(z, sigma=radius)
-        
-        # Compute curvature
-        dz_dy, dz_dx = np.gradient(z_scaled, cell_size)
-        d2z_dy2, d2z_dxdy_1 = np.gradient(dz_dy, cell_size)
-        d2z_dxdy_2, d2z_dx2 = np.gradient(dz_dx, cell_size)
-        H = (d2z_dx2 + d2z_dy2) / 2
-        
-        # Adaptive epsilon at this scale
-        eps = compute_adaptive_epsilon(H)
-        epsilons.append(eps)
-    
-    # Use median across scales (robust to scale-dependent noise)
-    epsilon = np.median(epsilons)
-    
-    return epsilon
-
-def compute_snr_based_epsilon(curvature: ScalarField, noise_estimate: float) -> float:
-    """
-    Use signal-to-noise ratio to determine epsilon.
-    
-    Args:
-        curvature: Mean curvature field
-        noise_estimate: From Layer 0 (0.034m in your star peak example)
-    
-    Returns:
-        Epsilon = noise_estimate * (curvature_scale_factor)
-    """
-    # Curvature scale factor: for 5m/pixel, 1m elevation change over 10m = 0.1 1/m
-    # But noise at 0.034m elevation produces curvature ~0.0003 1/m
-    # So we need epsilon above noise floor
-    
-    # Estimate curvature noise floor
-    c_flat = curvature.flatten()
-    noise_floor = np.percentile(np.abs(c_flat), 5)  # 5th percentile as noise floor
-    
-    # Set epsilon 2-3x above noise floor
-    epsilon = noise_floor * 2.5
-    
-    return epsilon
-    
-# Version 2
-
-class Layer2_Adaptive(Layer2_RegionalGeometry):
-    """Layer 2 with automatic epsilon detection."""
-    
-    def execute(self, input_data: Heightmap) -> Dict[str, ScalarField]:
-        """Compute curvature with automatic epsilon."""
-        
-        z = input_data.data
-        cell_size = input_data.config.horizontal_scale
-        
-        # Compute curvature (same as before)
-        dz_dy, dz_dx = np.gradient(z, cell_size)
-        d2z_dy2, d2z_dxdy_1 = np.gradient(dz_dy, cell_size)
-        d2z_dxdy_2, d2z_dx2 = np.gradient(dz_dx, cell_size)
-        d2z_dxdy = (d2z_dxdy_1 + d2z_dxdy_2) / 2
-        mean_curvature = (d2z_dx2 + d2z_dy2) / 2
-        gaussian_curvature = d2z_dx2 * d2z_dy2 - d2z_dxdy**2
-        
-        # AUTO-DETECT EPSILON
-        epsilon = self._auto_detect_epsilon(mean_curvature)
-        
-        print(f"Auto-detected curvature epsilon: {epsilon:.6f} 1/m")
-        
-        # Classify with detected epsilon
-        curvature_type = self._classify_with_epsilon(
-            mean_curvature, 
-            gaussian_curvature, 
-            epsilon
-        )
-        
-        return {
-            "curvature": mean_curvature.astype(np.float32),
-            "curvature_type": curvature_type,
-            "epsilon_used": epsilon  # Optional: include in output
-        }
-    
-    def _auto_detect_epsilon(self, curvature: ScalarField) -> float:
-        """
-        Automatically detect optimal epsilon using multiple methods.
-        """
-        # Method 1: Statistical threshold (10th percentile)
-        c_flat = np.abs(curvature.flatten())
-        c_flat = c_flat[~np.isnan(c_flat)]
-        epsilon_percentile = np.percentile(c_flat, 10)
-        
-        # Method 2: Standard deviation method
-        epsilon_std = 0.5 * np.std(c_flat)
-        
-        # Method 3: MAD method (robust)
-        median = np.median(c_flat)
-        mad = np.median(np.abs(c_flat - median))
-        epsilon_mad = 0.6745 * mad  # Convert to equivalent std
-        
-        # Method 4: Noise floor method
-        noise_floor = np.percentile(c_flat, 5)
-        epsilon_noise = noise_floor * 2.5
-        
-        # Combine methods (median of all for robustness)
-        epsilons = [epsilon_percentile, epsilon_std, epsilon_mad, epsilon_noise]
-        
-        # Filter out unreasonable values (too small or too large)
-        epsilons = [e for e in epsilons if 1e-8 < e < 1e-2]
-        
-        # Use median as final epsilon
-        epsilon = np.median(epsilons)
-        
-        # Ensure minimum threshold
-        epsilon = max(epsilon, 1e-6)
-        
-        return epsilon
-    
-    def _classify_with_epsilon(self, H, K, epsilon):
-        """Classification with given epsilon."""
-        result = np.full(H.shape, "FLAT", dtype='<U10')
-        
-        saddle_mask = K < -epsilon
-        result[saddle_mask] = "SADDLE"
-        
-        convex_mask = (H > epsilon) & (K > epsilon) & ~saddle_mask
-        result[convex_mask] = "CONVEX"
-        
-        concave_mask = (H < -epsilon) & (K > epsilon) & ~saddle_mask
-        result[concave_mask] = "CONCAVE"
-        
-        return result
-
-# Version 1
 class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
     """
     Compute second derivatives: curvature classification.
-    
-    Takes calibrated Heightmap directly (not slope/aspect) to avoid
-    compounding numerical errors from two finite-difference steps.
+    Now includes Gaussian curvature in output.
     """
     
-    # String labels for curvature types (compatible with Layer 3)
-    CURVATURE_LABELS = {
-        0: "FLAT",
-        1: "CONVEX", 
-        2: "CONCAVE",
-        3: "SADDLE"
-    }
+    CURVATURE_LABELS = ["FLAT", "CONVEX", "CONCAVE", "SADDLE"]
     
-    def __init__(self, config: PipelineConfig):
+    def __init__(self, config: PipelineConfig, adaptive_epsilon: bool = False):
         super().__init__(config)
-        self._extra_smoothing = config.noise_reduction_sigma < 1.5
+        self.adaptive_epsilon = adaptive_epsilon
+        self._epsilon_used: Optional[tuple[float, float]] = None
         
     def execute(self, input_data: Heightmap) -> Dict[str, ScalarField]:
         """
         Compute curvature fields from heightmap.
         
-        Args:
-            input_data: Heightmap from Layer 0
-            
         Returns:
-            dict with 'curvature' and 'curvature_type' fields
+            dict with 'curvature' (mean curvature), 'gaussian_curvature', and 'curvature_type'
         """
-        # Validate input
         if not isinstance(input_data, Heightmap):
             raise TypeError(f"Expected Heightmap, got {type(input_data)}")
         
         z = input_data.data
         cell_size = input_data.config.horizontal_scale
         
-        # Optional: Extra smoothing for second derivatives
-        # Only if Layer 0 smoothing was minimal
-        if self._extra_smoothing:
-            z = ndimage.gaussian_filter(z, sigma=0.5)
-            #warnings.warn("Applied extra σ=0.5 smoothing for second derivatives", UserWarning)
-            print("Applied extra σ=0.5 smoothing for second derivatives")
-        
-        # Compute all second derivatives correctly
+        # Compute curvature
         mean_curvature, gaussian_curvature = self._compute_curvature(z, cell_size)
         
+        # Validate and clean outputs
+        mean_curvature, gaussian_curvature = self._validate_curvature(
+            mean_curvature, gaussian_curvature
+        )
+        
+        # Determine epsilon — adaptive uses both H and K independently
+        h_epsilon, k_epsilon = self._get_epsilon(mean_curvature, gaussian_curvature)
+        self._epsilon_used = (h_epsilon, k_epsilon)
+
         # Classify curvature type
-        curvature_type = self._classify_curvature(mean_curvature, gaussian_curvature)
+        curvature_type = self._classify_curvature(
+            mean_curvature, gaussian_curvature, h_epsilon, k_epsilon
+        )
+
+        # Log statistics
+        self._log_classification_stats(curvature_type, h_epsilon, k_epsilon)
         
         return {
             "curvature": mean_curvature.astype(np.float32),
+            "gaussian_curvature": gaussian_curvature.astype(np.float32),  # ← ADDED
             "curvature_type": curvature_type
         }
     
-    def _compute_curvature(self, z: ScalarField, cell_size: float) -> tuple[ScalarField, ScalarField]:
-        """
-        Compute mean and Gaussian curvature from heightfield.
-        
-        Uses central differences with symmetric mixed partial calculation.
-        
-        Returns:
-            tuple: (mean_curvature, gaussian_curvature) in 1/meters
-        """
+    def _compute_curvature(self, z: ScalarField, cell_size: float) -> Tuple[ScalarField, ScalarField]:
+        """Compute mean and Gaussian curvature."""
         # First derivatives
         dz_dy, dz_dx = np.gradient(z, cell_size)
         
         # Second derivatives with symmetric mixed partial
-        # Method 1: From dz_dy
         d2z_dy2, d2z_dxdy_1 = np.gradient(dz_dy, cell_size)
-        
-        # Method 2: From dz_dx  
         d2z_dxdy_2, d2z_dx2 = np.gradient(dz_dx, cell_size)
         
-        # Average mixed partial for symmetry (ensures smoothness)
-        d2z_dxdy = (d2z_dxdy_1 + d2z_dxdy_2) / 2
+        # Average mixed partial for symmetry
+        d2z_dxdy = (d2z_dxdy_1 + d2z_dxdy_2) / 2.0
         
         # Mean curvature: H = (z_xx + z_yy) / 2
-        # Units: 1/meters
-        mean_curvature = (d2z_dx2 + d2z_dy2) / 2
+        mean_curvature = (d2z_dx2 + d2z_dy2) / 2.0
         
         # Gaussian curvature: K = z_xx * z_yy - (z_xy)²
-        # Units: 1/meters²
-        gaussian_curvature = d2z_dx2 * d2z_dy2 - d2z_dxdy**2
+        gaussian_curvature = d2z_dx2 * d2z_dy2 - d2z_dxdy * d2z_dxdy
         
         return mean_curvature, gaussian_curvature
     
-    def _classify_curvature(self, H: ScalarField, K: ScalarField) -> np.ndarray:
+    def _validate_curvature(self, H: ScalarField, K: ScalarField) -> Tuple[ScalarField, ScalarField]:
+        """Handle NaN, Inf, and extreme values. H and K are validated independently."""
+        H = np.asarray(H, dtype=np.float32)
+        K = np.asarray(K, dtype=np.float32)
+        
+        # Handle NaN — if either field has NaN, zero both at those positions
+        nan_mask = np.isnan(H) | np.isnan(K)
+        if np.any(nan_mask):
+            nan_count = int(np.sum(nan_mask))
+            print(f"Curvature contains {nan_count} NaN values - filling with 0")
+            H[nan_mask] = 0.0
+            K[nan_mask] = 0.0
+        
+        # Handle Inf — clip each field to its own reasonable range independently
+        # H units: 1/m,  K units: 1/m² — different magnitudes, different clip bounds
+        if np.any(np.isinf(H)):
+            inf_count = int(np.sum(np.isinf(H)))
+            print(f"Mean curvature (H) contains {inf_count} Inf values - clipping")
+            H = np.clip(H, -1.0, 1.0)        # 1/m: reasonable bound for terrain
+        if np.any(np.isinf(K)):
+            inf_count = int(np.sum(np.isinf(K)))
+            print(f"Gaussian curvature (K) contains {inf_count} Inf values - clipping")
+            K = np.clip(K, -1.0, 1.0)        # 1/m²: same order of magnitude for terrain
+        
+        return H, K
+    
+    # In rgeometry.py - Replace lines 94-115
+
+    def _get_epsilon(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
         """
-        Classify each pixel into curvature type based on mean (H) and Gaussian (K) curvature.
-        
-        Classification logic:
-        - FLAT: |H| < ε and |K| < ε (near-zero curvature)
-        - CONVEX: H > ε and K > ε (bowl upward, like ridge/peak)
-        - CONCAVE: H < -ε and K > ε (bowl downward, like valley)
-        - SADDLE: K < -ε (principal curvatures have opposite signs, like pass)
-        
-        Returns:
-            String array with curvature labels
+        Return (h_epsilon, k_epsilon) — independent thresholds for H and K.
         """
-        epsilon = self.config.curvature_epsilon
+        if self.adaptive_epsilon:
+            return self._compute_adaptive_epsilon(H, K)
+        else:
+            eps = float(self.config.curvature_epsilon)
+            return eps, eps  # Same value, but returned as tuple for consistency
+
+    def _compute_adaptive_epsilon(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
+        """
+        Compute independent thresholds from each field's distribution.
         
-        # Initialize with FLAT
+        CRITICAL: H and K have different units and magnitudes!
+        - H: 1/m (typically 0.001 to 0.01)
+        - K: 1/m² (typically 0.00001 to 0.0001)
+        """
+        h_std = float(np.std(H[~np.isnan(H)]))
+        k_std = float(np.std(K[~np.isnan(K)]))
+        
+        # H-epsilon:
+        h_epsilon = max(0.1 * h_std, 1e-6)
+        k_epsilon = max(0.2 * k_std, 1e-5)  # floor at 1e-5 for classification
+        
+        return h_epsilon, k_epsilon
+    
+    def _classify_curvature(
+        self, H: ScalarField, K: ScalarField, h_epsilon: float, k_epsilon: float
+    ) -> np.ndarray:
+        """Classify using independent H and K thresholds."""
+        H = np.asarray(H)
+        K = np.asarray(K)
+        
         result = np.full(H.shape, "FLAT", dtype='<U10')
         
-        # Saddle points (negative Gaussian curvature) - HIGHEST PRIORITY
-        # These are passes, cols, and other mixed curvature features
-        saddle_mask = K < -epsilon
+        # Saddle: K must be negative AND exceed K threshold
+        saddle_mask = K < -k_epsilon
         result[saddle_mask] = "SADDLE"
         
-        # Convex (positive mean curvature, positive Gaussian)
-        # These are ridges, peaks, and other locally high features
-        convex_mask = (H > epsilon) & (K > epsilon) & ~saddle_mask
+        # Convex: H > h_epsilon AND K > k_epsilon
+        convex_mask = (H > h_epsilon) & (K > k_epsilon) & ~saddle_mask
         result[convex_mask] = "CONVEX"
         
-        # Concave (negative mean curvature, positive Gaussian)
-        # These are valleys, pits, and other locally low features
-        concave_mask = (H < -epsilon) & (K > epsilon) & ~saddle_mask
+        # Concave: H < -h_epsilon AND K > k_epsilon
+        concave_mask = (H < -h_epsilon) & (K > k_epsilon) & ~saddle_mask
         result[concave_mask] = "CONCAVE"
-        
-        # Log classification statistics
-        self._log_classification_stats(result)
         
         return result
     
-    def _log_classification_stats(self, curvature_type: np.ndarray) -> None:
-        """Log curvature classification statistics."""
-        total = curvature_type.size
-        stats = {}
-        for label in ["FLAT", "CONVEX", "CONCAVE", "SADDLE"]:
-            count = np.sum(curvature_type == label)
-            pct = 100 * count / total
-            stats[label] = (count, pct)
+    def _log_classification_stats(
+        self, curvature_type: np.ndarray, h_epsilon: float, k_epsilon: float
+    ) -> None:
+        """Log classification statistics."""
+        total        = curvature_type.size
+        flat_count   = np.sum(curvature_type == "FLAT")
+        convex_count = np.sum(curvature_type == "CONVEX")
+        concave_count= np.sum(curvature_type == "CONCAVE")
+        saddle_count = np.sum(curvature_type == "SADDLE")
         
-        # Only log if significant non-flat areas
-        if stats["CONVEX"][0] + stats["CONCAVE"][0] + stats["SADDLE"][0] > 1000:
-            warnings.warn(
-                f"Curvature classification: "
-                f"CONVEX={stats['CONVEX'][0]:.0f} ({stats['CONVEX'][1]:.1f}%), "
-                f"CONCAVE={stats['CONCAVE'][0]:.0f} ({stats['CONCAVE'][1]:.1f}%), "
-                f"SADDLE={stats['SADDLE'][0]:.0f} ({stats['SADDLE'][1]:.1f}%), "
-                f"FLAT={stats['FLAT'][0]:.0f} ({stats['FLAT'][1]:.1f}%)",
+        non_flat = convex_count + concave_count + saddle_count
+        if non_flat > 1000:
+            print(
+                f"Curvature classification (H_ε={h_epsilon:.6f} 1/m, K_ε={k_epsilon:.6f} 1/m²): "
+                f"CONVEX={convex_count} ({100*convex_count/total:.1f}%), "
+                f"CONCAVE={concave_count} ({100*concave_count/total:.1f}%), "
+                f"SADDLE={saddle_count} ({100*saddle_count/total:.1f}%), "
+                f"FLAT={flat_count} ({100*flat_count/total:.1f}%)",
                 UserWarning
             )
     
     @property
     def output_schema(self) -> dict:
+        """Schema for pipeline validation."""
         return {
             "curvature": {
                 "type": "ScalarField", 
                 "unit": "1/meters",
                 "description": "Mean curvature (H)"
             },
+            "gaussian_curvature": {
+                "type": "ScalarField",
+                "unit": "1/meters²",
+                "description": "Gaussian curvature (K) - product of principal curvatures"
+            },
             "curvature_type": {
                 "type": "CategoricalField", 
-                "values": ["CONVEX", "CONCAVE", "FLAT", "SADDLE"],
-                "description": "Curvature classification for each pixel"
+                "values": self.CURVATURE_LABELS,
+                "description": "Curvature classification based on H and K"
             }
         }
-
-
-# Optional: Multi-scale curvature for your hairline ridge
-class Layer2_MultiScale(Layer2_RegionalGeometry):
-    """
-    Extended version that computes curvature at multiple scales.
     
-    Critical for your terrain where features vary widely in scale:
-    - Hairline ridge: 1-3px (micro)
-    - Mountain pass: 10-20px (meso)
-    - Coastal features: 50+px (macro)
-    """
-    
-    def execute(self, input_data: Heightmap) -> Dict[str, Dict]:
-        """
-        Compute curvature at multiple scales.
+    @property
+    def epsilon_used(self) -> Optional[tuple[float, float]]:
+        """Get (h_epsilon, k_epsilon) used in the last classification."""
+        return self._epsilon_used
         
+class MultiScaleCurvatureAnalyzer:
+    """
+    Diagnostic tool for multi-scale curvature analysis.
+    
+    This is NOT a pipeline layer. It's for visualization and debugging
+    to help determine the appropriate scale for feature extraction.
+    
+    Analyzes curvature at micro, meso, and macro scales to identify
+    which scale best reveals terrain features.
+    """
+    
+    def __init__(self, config: PipelineConfig):
+        """
+        Args:
+            config: Pipeline configuration with analysis_scales dictionary
+        """
+        self.config = config
+    
+    def analyze(self, heightmap: Heightmap) -> Dict[str, Dict[str, ScalarField]]:
+        """
+        Compute curvature at multiple scales for diagnostic purposes.
+        
+        Args:
+            heightmap: Calibrated Heightmap from Layer 0
+            
         Returns:
-            dict with scale_name -> {"curvature": ..., "curvature_type": ...}
+            dict with scale_name -> {
+                "curvature": mean_curvature array,
+                "gaussian_curvature": gaussian_curvature array,
+                "curvature_type": classification array
+            }
         """
-        z = input_data.data
-        cell_size = input_data.config.horizontal_scale
-        
+        z = heightmap.data
+        cell_size = heightmap.config.horizontal_scale
         results = {}
         
         for scale_name, radius in self.config.analysis_scales.items():
             # Apply Gaussian blur at this scale
             z_scaled = ndimage.gaussian_filter(z, sigma=radius)
             
-            # Compute curvature on blurred surface
+            # Compute curvature
             mean_curvature, gaussian_curvature = self._compute_curvature(z_scaled, cell_size)
-            curvature_type = self._classify_curvature(mean_curvature, gaussian_curvature)
+            
+            # Validate
+            mean_curvature, gaussian_curvature = self._validate_curvature(
+                mean_curvature, gaussian_curvature
+            )
+            
+            # Classify with fixed epsilon from config (same value for H and K thresholds)
+            eps = self.config.curvature_epsilon
+            curvature_type = self._classify_curvature(
+                mean_curvature, 
+                gaussian_curvature, 
+                h_epsilon=eps,
+                k_epsilon=eps
+            )
             
             results[scale_name] = {
                 "curvature": mean_curvature.astype(np.float32),
+                "gaussian_curvature": gaussian_curvature.astype(np.float32),
                 "curvature_type": curvature_type
             }
         
         return results
+    
+    def _compute_curvature(self, z: ScalarField, cell_size: float) -> Tuple[ScalarField, ScalarField]:
+        """Compute mean and Gaussian curvature."""
+        # First derivatives
+        dz_dy, dz_dx = np.gradient(z, cell_size)
+        
+        # Second derivatives with symmetric mixed partial
+        d2z_dy2, d2z_dxdy_1 = np.gradient(dz_dy, cell_size)
+        d2z_dxdy_2, d2z_dx2 = np.gradient(dz_dx, cell_size)
+        
+        # Average mixed partial for symmetry
+        d2z_dxdy = (d2z_dxdy_1 + d2z_dxdy_2) / 2.0
+        
+        # Mean curvature: H = (z_xx + z_yy) / 2
+        mean_curvature = (d2z_dx2 + d2z_dy2) / 2.0
+        
+        # Gaussian curvature: K = z_xx * z_yy - (z_xy)²
+        gaussian_curvature = d2z_dx2 * d2z_dy2 - d2z_dxdy * d2z_dxdy
+        
+        return mean_curvature, gaussian_curvature
+    
+    def _validate_curvature(self, H: ScalarField, K: ScalarField) -> Tuple[ScalarField, ScalarField]:
+        """Handle NaN, Inf, and extreme values."""
+        H = np.asarray(H, dtype=np.float32)
+        K = np.asarray(K, dtype=np.float32)
+        
+        # Handle NaN
+        if np.any(np.isnan(H)):
+            H = np.nan_to_num(H, nan=0.0)
+            K = np.nan_to_num(K, nan=0.0)
+        
+        # Handle Inf
+        if np.any(np.isinf(H)):
+            H = np.clip(H, -1.0, 1.0)
+            K = np.clip(K, -1.0, 1.0)
+        
+        return H, K
+    
+    def _classify_curvature(
+        self, H: ScalarField, K: ScalarField, h_epsilon: float, k_epsilon: float
+    ) -> np.ndarray:
+        """Classify each pixel into curvature type."""
+        H = np.asarray(H)
+        K = np.asarray(K)
+        
+        result = np.full(H.shape, "FLAT", dtype='<U10')
+        
+        saddle_mask  = K < -k_epsilon
+        convex_mask  = (H >  h_epsilon) & (K >  k_epsilon) & ~saddle_mask
+        concave_mask = (H < -h_epsilon) & (K >  k_epsilon) & ~saddle_mask
+        
+        result[saddle_mask]  = "SADDLE"
+        result[convex_mask]  = "CONVEX"
+        result[concave_mask] = "CONCAVE"
+        
+        return result
+    
+    def suggest_optimal_scale(self, heightmap: Heightmap, metric: str = 'variance') -> str:
+        """
+        Analyze curvature at all scales and suggest the optimal one.
+        
+        Args:
+            heightmap: Calibrated Heightmap
+            metric: 'variance', 'saddle_count', or 'non_flat_ratio'
+            
+        Returns:
+            Name of optimal scale ('micro', 'meso', or 'macro')
+        """
+        results = self.analyze(heightmap)
+        scales = list(results.keys())
+        
+        if not scales:
+            return 'meso'
+        
+        scores = {}
+        
+        for scale_name, data in results.items():
+            curvature = data['curvature']
+            curvature_type = data['curvature_type']
+            
+            if metric == 'variance':
+                # Higher variance = more feature detail
+                scores[scale_name] = np.var(curvature)
+                
+            elif metric == 'saddle_count':
+                # More saddles = more topological complexity
+                scores[scale_name] = np.sum(curvature_type == "SADDLE")
+                
+            elif metric == 'non_flat_ratio':
+                # Ratio of non-flat pixels
+                non_flat = np.sum(curvature_type != "FLAT")
+                scores[scale_name] = non_flat / curvature_type.size
+                
+            else:
+                # Default: combine variance and saddle count
+                scores[scale_name] = np.var(curvature) * (1 + np.sum(curvature_type == "SADDLE") / curvature_type.size)
+        
+        # Return scale with highest score
+        optimal = max(scores, key=scores.get)
+        
+        # Log the scores for debugging
+        print(f"\nMulti-scale analysis scores ({metric}):")
+        for scale, score in scores.items():
+            print(f"  {scale}: {score:.6f}")
+        print(f"Optimal scale: {optimal}")
+        
+        return optimal
+    
+    def get_scale_statistics(self, heightmap: Heightmap) -> Dict[str, Dict]:
+        """
+        Get detailed statistics for each scale.
+        
+        Returns:
+            dict with scale_name -> {
+                'curvature_stats': {'min', 'max', 'mean', 'std'},
+                'classification_counts': {label: count},
+                'saddle_density': float
+            }
+        """
+        results = self.analyze(heightmap)
+        statistics = {}
+        
+        for scale_name, data in results.items():
+            curvature = data['curvature']
+            curvature_type = data['curvature_type']
+            
+            unique, counts = np.unique(curvature_type, return_counts=True)
+            classification_counts = dict(zip(unique, counts))
+            
+            statistics[scale_name] = {
+                'curvature_stats': {
+                    'min': float(np.min(curvature)),
+                    'max': float(np.max(curvature)),
+                    'mean': float(np.mean(curvature)),
+                    'std': float(np.std(curvature))
+                },
+                'classification_counts': classification_counts,
+                'saddle_density': classification_counts.get('SADDLE', 0) / curvature_type.size
+            }
+        
+        return statistics
+    
+    def visualize_scales(self, heightmap: Heightmap, save_path: str = None):
+        """
+        Create a visualization comparing curvature at different scales.
+        
+        Args:
+            heightmap: Calibrated Heightmap
+            save_path: Optional path to save the figure
+        """
+        results = self.analyze(heightmap)
+        scales = list(results.keys())
+        
+        fig, axes = plt.subplots(len(scales), 3, figsize=(15, 5 * len(scales)))
+        
+        # Handle single scale case
+        if len(scales) == 1:
+            axes = axes.reshape(1, -1)
+        
+        for idx, scale_name in enumerate(scales):
+            data = results[scale_name]
+            curvature = data['curvature']
+            curvature_type = data['curvature_type']
+            
+            # Curvature map
+            ax = axes[idx, 0]
+            vmax = np.percentile(np.abs(curvature), 95)
+            im = ax.imshow(curvature, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+            ax.set_title(f'{scale_name.title()} Scale: Mean Curvature\nσ={self.config.analysis_scales[scale_name]}px')
+            ax.axis('off')
+            plt.colorbar(im, ax=ax, shrink=0.8)
+            
+            # Curvature type
+            ax = axes[idx, 1]
+            type_to_int = {"FLAT": 0, "CONVEX": 1, "CONCAVE": 2, "SADDLE": 3}
+            type_numeric = np.vectorize(type_to_int.get)(curvature_type)
+            im = ax.imshow(type_numeric, cmap='Set3', vmin=0, vmax=3)
+            ax.set_title(f'Classification')
+            ax.axis('off')
+            cbar = plt.colorbar(im, ax=ax, ticks=[0, 1, 2, 3], shrink=0.8)
+            cbar.ax.set_yticklabels(['FLAT', 'CONVEX', 'CONCAVE', 'SADDLE'], fontsize=8)
+            
+            # Histogram
+            ax = axes[idx, 2]
+            ax.hist(curvature.flatten(), bins=50, color='blue', alpha=0.7, edgecolor='black')
+            ax.set_title(f'Curvature Distribution')
+            ax.set_xlabel('Curvature (1/m)')
+            ax.set_ylabel('Frequency')
+            ax.axvline(0, color='red', linestyle='--', alpha=0.5)
+            ax.grid(True, alpha=0.3)
+        
+        plt.suptitle('Multi-Scale Curvature Analysis', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Saved multi-scale visualization to: {save_path}")

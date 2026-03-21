@@ -27,6 +27,7 @@ VectorField: TypeAlias = tuple[np.ndarray, np.ndarray]  # (dx, dy) components
 LayerBundle: TypeAlias = Dict[str, Any]  # Keys defined per-layer in output_schema
 
 # Feature classification
+
 class CurvatureType(Enum):
     CONVEX = auto()
     CONCAVE = auto()
@@ -49,7 +50,6 @@ class Traversability(Enum):
     
     def __str__(self):
         return self.name
-    
     
 #
 #  Immutable Data Containers
@@ -233,6 +233,7 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
     def output_schema(self) -> dict:
         return {
             "curvature": {"type": "ScalarField", "unit": "1/meters"},
+            "gaussian_curvature": {"type": "ScalarField", "unit": "1/meters²"},  # ADD THIS
             "curvature_type": {"type": "CategoricalField", "values": ["CONVEX", "CONCAVE", "FLAT", "SADDLE"]}
         }
 
@@ -264,6 +265,176 @@ class Layer3_TopologicalFeatures(PipelineLayer[List["TerrainFeature"]]):
             "feature_types": ["PeakFeature", "ValleyFeature", "RidgeFeature", "SaddleFeature"],
             "geometry": "points and polylines in PixelCoord space"
         }
+
+"""
+    Topological Features Abstractions
+    
+"""
+
+class ClassifiedFeature(TerrainFeature, ABC):
+    """
+    A TerrainFeature with geometric classification.
+    
+    All concrete features (Peak, Ridge, etc.) inherit from this.
+    """
+    
+    @property
+    @abstractmethod
+    def curvature_type(self) -> CurvatureType:
+        pass
+    
+    @property
+    @abstractmethod
+    def avg_slope(self) -> float:
+        """Average slope magnitude across feature area."""
+        pass
+    
+    @abstractmethod
+    def is_traversable(self, config: 'PipelineConfig') -> Traversability:
+        """Evaluate traversability against vehicle constraints."""
+        pass
+
+#
+#  Concrete Feature Types
+#         
+
+@dataclass
+class PeakFeature(ClassifiedFeature):
+    """Local maximum with convex surroundings."""
+    _: KW_ONLY
+    prominence: float
+    visibility_radius: Optional[float] = None
+    _avg_slope: float = 15.0  # store internally
+
+    @property
+    def curvature_type(self) -> CurvatureType:
+        return CurvatureType.CONVEX
+
+    @property
+    def avg_slope(self) -> float:
+        return self._avg_slope
+
+    def is_traversable(self, config: PipelineConfig) -> Traversability:
+        return config.is_traversable(self.avg_slope)
+
+    def contains_point(self, pixel: PixelCoord) -> bool:
+        x, y = self.centroid
+        return abs(pixel[0] - x) < 3 and abs(pixel[1] - y) < 3
+
+
+@dataclass  
+class RidgeFeature(ClassifiedFeature):
+    """Linear convex feature connecting peaks."""
+    _: KW_ONLY
+    spine_points: List[PixelCoord]
+    connected_peaks: Set[str]
+    _avg_slope: float = 10.0  # store internally
+
+    @property
+    def curvature_type(self) -> CurvatureType:
+        return CurvatureType.CONVEX
+
+    @property
+    def avg_slope(self) -> float:
+        return self._avg_slope
+
+    def is_traversable(self, config: PipelineConfig) -> Traversability:
+        return config.is_traversable(self.avg_slope)
+
+    def contains_point(self, pixel: PixelCoord) -> bool:
+        if not self.spine_points:
+            return False
+        distances = [abs(pixel[0] - x) + abs(pixel[1] - y)
+                     for x, y in self.spine_points]
+        return min(distances) < 3
+
+
+@dataclass
+class ValleyFeature(ClassifiedFeature):
+    """Local minimum with concave surroundings."""
+    _: KW_ONLY
+    spine_points: List[PixelCoord] = field(default_factory=list)
+    drainage_area: Optional[float] = None
+    _avg_slope: float = 10.0  # store internally
+
+    @property
+    def curvature_type(self) -> CurvatureType:
+        return CurvatureType.CONCAVE
+
+    @property
+    def avg_slope(self) -> float:
+        return self._avg_slope
+
+    def is_traversable(self, config: 'PipelineConfig') -> Traversability:
+        base = config.is_traversable(self.avg_slope)
+        if base == Traversability.FREE:
+            return Traversability.DIFFICULT
+        return base
+
+    def contains_point(self, pixel: PixelCoord) -> bool:
+        if not self.spine_points:
+            return False
+        distances = [np.sqrt((pixel[0]-x)**2 + (pixel[1]-y)**2) 
+                    for x, y in self.spine_points]
+        return min(distances) < 5
+
+
+@dataclass
+class SaddleFeature(ClassifiedFeature):
+    """Pass connecting ridges/valleys."""
+    _: KW_ONLY
+    elevation: float = 0.0
+    connecting_ridges: Set[str] = field(default_factory=set)
+    connecting_valleys: Set[str] = field(default_factory=set)
+    k_curvature: Optional[float] = None
+    _avg_slope: float = 10.0  # store internally
+
+    @property
+    def curvature_type(self) -> CurvatureType:
+        return CurvatureType.SADDLE
+
+    @property
+    def avg_slope(self) -> float:
+        return self._avg_slope
+
+    def is_traversable(self, config: 'PipelineConfig') -> Traversability:
+        return config.is_traversable(self.avg_slope)
+
+    def contains_point(self, pixel: PixelCoord) -> bool:
+        x, y = self.centroid
+        return abs(pixel[0] - x) < 3 and abs(pixel[1] - y) < 3
+
+
+@dataclass
+class FlatZoneFeature(ClassifiedFeature):
+    """Large flat area suitable for traversability."""
+    _: KW_ONLY
+    area_pixels: int = 0
+    max_slope: float = 0.0
+    min_slope: float = 0.0
+    _avg_slope: float = 0.0  # store internally
+
+    @property
+    def curvature_type(self) -> CurvatureType:
+        return CurvatureType.FLAT
+
+    @property
+    def avg_slope(self) -> float:
+        return self._avg_slope
+
+    def is_traversable(self, config: 'PipelineConfig') -> Traversability:
+        if self.max_slope < config.vehicle_climb_angle:
+            return Traversability.FREE
+        elif self.max_slope < config.cliff_threshold_degrees:
+            return Traversability.DIFFICULT
+        return Traversability.BLOCKED
+
+    def contains_point(self, pixel: PixelCoord) -> bool:
+        if 'bounds' not in self.metadata:
+            return False
+        x, y = pixel
+        x_min, x_max, y_min, y_max = self.metadata['bounds']
+        return x_min <= x <= x_max and y_min <= y <= y_max
 
 class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
     """
@@ -378,69 +549,8 @@ class Pipeline:
         raise RuntimeError("Pipeline has no return object [AnalyzedTerrain]")
         
  
-#
-#  Feature Abstractions
-# 
 
-class ClassifiedFeature(TerrainFeature, ABC):
-    """
-    A TerrainFeature with geometric classification.
     
-    All concrete features (Peak, Ridge, etc.) inherit from this.
-    """
-    
-    @property
-    @abstractmethod
-    def curvature_type(self) -> CurvatureType:
-        pass
-    
-    @property
-    @abstractmethod
-    def avg_slope(self) -> float:
-        """Average slope magnitude across feature area."""
-        pass
-    
-    @abstractmethod
-    def is_traversable(self, config: 'PipelineConfig') -> Traversability:
-        """Evaluate traversability against vehicle constraints."""
-        pass
-
-#
-#  Concrete Feature Types
-#         
-
-@dataclass
-class PeakFeature(ClassifiedFeature):
-    """Local maximum with convex surroundings."""
-    _: KW_ONLY
-    prominence: float                        # Height above surrounding saddle in meters
-    visibility_radius: Optional[float] = None  # Meters
-    
-    @property
-    def curvature_type(self) -> CurvatureType:
-        return CurvatureType.CONVEX
-    
-    def is_traversable(self, config: PipelineConfig) -> Traversability:
-        # Peaks are usually accessible only if slope permits
-        return config.is_traversable(self.avg_slope)
-    
-    def contains_point(self, pixel: PixelCoord) -> bool:
-        # Implement boundary check (e.g., convex hull test)
-        pass
-
-@dataclass  
-class RidgeFeature(ClassifiedFeature):
-    """Linear convex feature connecting peaks."""
-    _: KW_ONLY
-    spine_points: List[PixelCoord]    # Polyline defining ridge crest
-    connected_peaks: Set[str]         # Feature IDs of connected peaks
-    
-    @property
-    def curvature_type(self) -> CurvatureType:
-        return CurvatureType.CONVEX
-    
-
-# ADDITONAL: ... ValleyFeature, SaddleFeature, etc. ...
 
 
 #
