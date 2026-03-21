@@ -5,7 +5,7 @@ A heightmap is a 2.5D scalar field: perfect geometric surface information, zero 
 below, or what the surface means. Analysis must proceed from fundamental mathematics to derived semantics.
 
 
-<img width="720" alt="unified_analysis" src="https://github.com/user-attachments/assets/8cf37207-a334-4cb7-bfdd-1d0b91ba8411" />
+<img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/8cf37207-a334-4cb7-bfdd-1d0b91ba8411" />
 
 ## The Analysis Pipeline
 
