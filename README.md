@@ -11,7 +11,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 *Before examining data, define the measurement context.*
 
 
-<img width="720" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/dc07e3a4-df0e-40d7-99c1-89370aeab41f" />
+<img width="1491" height="1004" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/086dfc90-f703-48aa-8768-108d71ae0fcb" />
 
 
 - **Input:** Raw grayscale image (0-255)
@@ -24,7 +24,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 1: Local Geometry (First Derivatives)
 *How does the surface behave at this exact point?*
 
-<img width="720" alt="layer1_lgeometric_results" src="https://github.com/user-attachments/assets/bc568115-3432-456a-9d7b-1569f6780428" />
+<img width="2230" height="1482" alt="layer1_lgeometric_results" src="https://github.com/user-attachments/assets/efaad743-6747-44d4-82d2-9f242d949004" />
 
 
 - **Input:** Calibrated surface
@@ -37,7 +37,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 2: Regional Geometry (Second Derivatives)
 *What shape does the neighborhood form around this point?*
 
-<img width="720" alt="layer2_regional_geometry_results" src="https://github.com/user-attachments/assets/aab64e15-318d-451c-b83a-6e600e327b99" />
+<img width="2677" height="1841" alt="layer2_regional_geometry_results" src="https://github.com/user-attachments/assets/15f1fd52-e70d-4e83-8a05-f9fb2422301d" />
 
 
 - **Input:** Gradient maps
@@ -50,6 +50,9 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 ### Layer 3: Topological Features (Discrete Objects)
 *Where do continuous shapes resolve into identifiable structures?*
+
+<img width="2683" height="2064" alt="layer3_topological_features" src="https://github.com/user-attachments/assets/6c61eff3-570e-4591-9f48-3a185b48b618" />
+
 
 - **Input:** Elevation + Curvature maps
 - **Operations:**
