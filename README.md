@@ -10,8 +10,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 0: Calibration (The Observable)
 *Before examining data, define the measurement context.*
 
-
-<img width="1491" height="1004" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/086dfc90-f703-48aa-8768-108d71ae0fcb" />
+<img width="1491" height="1004" alt="layer0_calibration_results" src="https://github.com/user-attachments/assets/8b3ee309-08a5-4986-9298-6671aa23931d" />
 
 
 - **Input:** Raw grayscale image (0-255)
@@ -24,7 +23,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 1: Local Geometry (First Derivatives)
 *How does the surface behave at this exact point?*
 
-<img width="2230" height="1482" alt="layer1_lgeometric_results" src="https://github.com/user-attachments/assets/efaad743-6747-44d4-82d2-9f242d949004" />
+<img width="2230" height="1482" alt="layer1_lgeometric_results" src="https://github.com/user-attachments/assets/ea9b2fd9-6eba-4976-a9ae-ec88dd5a0d1b" />
 
 
 - **Input:** Calibrated surface
@@ -37,7 +36,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 2: Regional Geometry (Second Derivatives)
 *What shape does the neighborhood form around this point?*
 
-<img width="2677" height="1841" alt="layer2_regional_geometry_results" src="https://github.com/user-attachments/assets/15f1fd52-e70d-4e83-8a05-f9fb2422301d" />
+<img width="2677" height="1841" alt="layer2_regional_geometry_results" src="https://github.com/user-attachments/assets/1e4b46e1-6d42-40c9-a294-3f9b54415260" />
 
 
 - **Input:** Gradient maps
@@ -51,7 +50,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 3: Topological Features (Discrete Objects)
 *Where do continuous shapes resolve into identifiable structures?*
 
-<img width="2683" height="2064" alt="layer3_topological_features" src="https://github.com/user-attachments/assets/6c61eff3-570e-4591-9f48-3a185b48b618" />
+<img width="2685" height="2064" alt="layer3_topological_features" src="https://github.com/user-attachments/assets/d61660bc-12a8-42af-9b4b-ccbbec90d005" />
 
 
 - **Input:** Elevation + Curvature maps
@@ -64,8 +63,8 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 ### Layer 4: Relational Analysis (Connectivity)
 *How do these features interact spatially?*
 
+<img width="2644" height="918" alt="layer4_relational_results" src="https://github.com/user-attachments/assets/a324c9cd-237c-48d7-a3f8-3dcc434ebf91" />
 
-<img width="2635" height="910" alt="layer4_relational_results" src="https://github.com/user-attachments/assets/6791f990-abad-4c20-be3c-b35e6ab587a9" />
 
 - **Input:** Topological features + Slope + Aspect
 - **Operations:**
@@ -77,6 +76,9 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 ### Layer 5: Semantic Interpretation (Meaning)
 *What does this mean for an end user?*
+
+<img width="2251" height="2065" alt="layer5_semantic_results" src="https://github.com/user-attachments/assets/5413e1a1-675c-407b-b98f-e655c7bfb25f" />
+
 
 - **Input:** Relational data + domain thresholds
 - **Operations:**
