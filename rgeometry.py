@@ -14,7 +14,6 @@ from core import Heightmap, ScalarField, PipelineConfig, PipelineLayer
 class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
     """
     Compute second derivatives: curvature classification.
-    Now includes Gaussian curvature in output.
     """
     
     CURVATURE_LABELS = ["FLAT", "CONVEX", "CONCAVE", "SADDLE"]

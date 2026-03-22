@@ -1,9 +1,5 @@
-# layer0_calibration.py
 """
 Layer 0: Calibration Module
-
-Responsible for converting raw grayscale imagery into a calibrated mathematical surface.
-This stage establishes the measurement context before any analysis begins.
 """
 
 import numpy as np
@@ -220,12 +216,10 @@ class Layer0_Calibration:
         if elevation_range > 10000:  # 10km range
             print(f"Extreme elevation range detected: {elevation_range:.1f}m. Check calibration parameters.")
         
-        # Check for artificial steps (optional)
+        # Check for artificial steps
         # This could indicate poor calibration or quantization artifacts
         hist, bin_edges = np.histogram(elevation_data, bins=50)
-        #if np.max(hist) > 0.9 * len(elevation_data.flat):
-        #    print("Elevation values appear highly quantized. Check vertical scale parameter.")
-        levation_range = elevation_data.max() - elevation_data.min()
+        
         if np.max(hist) > 0.9 * len(elevation_data.flat):
             if elevation_range < 0.01:
                 print("Elevation values appear highly quantized. Check vertical scale parameter.")

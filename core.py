@@ -99,13 +99,13 @@ class Heightmap:
     
     @property
     def shape(self) -> PixelCoord:
-        return self.data.shape[::-1]  # Return (width, height)
+        return self.data.shape
     
     def elevation_at(self, pixel: PixelCoord) -> Optional[float]:
-        """Safe elevation lookup with bounds checking."""
         x, y = pixel
-        if 0 <= x < self.shape[0] and 0 <= y < self.shape[1]:
-            return self.data[y, x]  # Note: numpy uses [row, col] = [y, x]
+        H, W = self.data.shape
+        if 0 <= x < W and 0 <= y < H:
+            return self.data[y, x]
         return None
     
     def world_at(self, pixel: PixelCoord) -> Optional[WorldCoord]:
@@ -721,6 +721,13 @@ class GameScaling:
                 vertical_scale_m_per_unit=0.25,
                 vehicle_climb_angle_deg=25.0,
                 infantry_climb_angle_deg=45.0
+            ),
+            GameType.CUSTOM: cls(
+                game_type=game,
+                horizontal_scale_m_per_px=5.0,    # Custom
+                vertical_scale_m_per_unit=0.25,
+                vehicle_climb_angle_deg=25.0,
+                infantry_climb_angle_deg=45.0
             )
         }
         return presets.get(game, presets[GameType.ARMA_3])
@@ -765,6 +772,7 @@ class PipelineConfig:
     flat_zone_slope_threshold_deg: float = 5.0
     border_margin_px: int = 10
     prominence_search_radius_m: float = 100.0
+    peak_shoulder_convex_ratio: float = 0.15  # Minimum convex pixels in shoulder
     
     # Layer 4: Relational 
     visibility_max_range_m: float = 1200.0

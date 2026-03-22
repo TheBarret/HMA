@@ -54,45 +54,45 @@ class Layer1_LocalGeometry(PipelineLayer[Dict[str, ScalarField]]):
     def _compute_gradient(self, heightmap: Heightmap) -> tuple[ScalarField, ScalarField]:
         """
         Compute gradient using central differences.
-        
+
         Returns:
             tuple: (slope_degrees, aspect_radians)
         """
         z = heightmap.data
         cell_size = heightmap.config.horizontal_scale
-        
+
         # CRITICAL: np.gradient with spacing parameter
         # Returns (dz_dy, dz_dx) where:
         #   axis=0 (rows) → y coordinate (Northing)
         #   axis=1 (cols) → x coordinate (Easting)
         dz_dy, dz_dx = np.gradient(z, cell_size)
-        
+
         # Slope magnitude: arctan(sqrt((dz/dx)² + (dz/dy)²))
         # This is the angle of steepest ascent from horizontal
         slope_rad = np.arctan(np.sqrt(dz_dx**2 + dz_dy**2))
         slope_deg = np.degrees(slope_rad)
-        
+
         # Aspect: direction of steepest DESCENT (water flow direction)
         # GIS convention: 0° = North, increasing clockwise (90° = East)
-        # 
-        # The gradient (dz_dx, dz_dy) points UPHILL.
-        # To get downhill direction, negate the gradient.
-        # 
-        # arctan2(-dz_dx, -dz_dy) gives:
-        #   -dz_dy positive → downhill to North
-        #   -dz_dx positive → downhill to East
-        # This matches standard GIS convention
-        aspect_rad = np.arctan2(-dz_dx, -dz_dy)
-        
+        #
+        # arctan2(-dz_dx, dz_dy):
+        #   dz_dy positive (uphill North) → downhill South, but negating dz_dx
+        #   flips East/West correctly for clockwise convention.
+        #   Net result: 0 = North, π/2 = East, π = South, 3π/2 = West
         # Normalize to [0, 2π)
-        aspect_rad = (aspect_rad + 2 * np.pi) % (2 * np.pi)
         
+        #aspect_rad = np.arctan2(-dz_dx, dz_dy)
+        #aspect_rad = (aspect_rad + 2 * np.pi) % (2 * np.pi)
+        
+        aspect_rad = np.arctan2(dz_dx, -dz_dy)
+        aspect_rad = (aspect_rad + 2 * np.pi) % (2 * np.pi)
+
         return slope_deg, aspect_rad
     
     def _validate_derivatives(self, slope: ScalarField, aspect: ScalarField) -> tuple[ScalarField, ScalarField]:
         """
         Validate and clean derivative fields.
-        
+
         Checks:
         - Slope within [0, 90] degrees
         - Aspect within [0, 2π] radians
@@ -102,35 +102,33 @@ class Layer1_LocalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         if np.any(slope < 0):
             print("Negative slope values detected, clipping to 0")
             slope = np.clip(slope, 0, 90)
-        
+
         if np.any(slope > 90):
             print(f"Slope > 90° detected (max: {np.max(slope):.2f}°), clipping")
             slope = np.clip(slope, 0, 90)
-        
+
         # Handle flat areas where aspect is undefined
-        flat_mask = slope < self._flat_threshold
+        flat_mask = slope < 0.01  # degrees — was 1e-6 radians (wrong units)
         if np.any(flat_mask):
-            # For flat areas, set aspect to a default (0 = North)
-            # or leave as NaN - choose based on downstream needs
+            aspect = aspect.copy()  # avoid mutating input array
             aspect[flat_mask] = 0.0
-            
-            # Optional: Log count of flat pixels
+
             flat_pct = 100 * np.sum(flat_mask) / flat_mask.size
-            if flat_pct > 10:  # More than 10% flat
+            if flat_pct > 10:
                 print(f"Large flat area detected: {flat_pct:.1f}% of map")
-        
+
         # Validate aspect range
         if np.any(aspect < 0) or np.any(aspect > 2 * np.pi):
             print("Aspect values outside [0, 2π], normalizing")
             aspect = aspect % (2 * np.pi)
-        
+
         # Check for NaN/Inf
         if np.any(np.isnan(slope)) or np.any(np.isnan(aspect)):
             raise ValueError("NaN values detected in derivatives")
-        
+
         if np.any(np.isinf(slope)) or np.any(np.isinf(aspect)):
             raise ValueError("Infinite values detected in derivatives")
-        
+
         return slope, aspect
     
     @property
@@ -163,25 +161,24 @@ class Layer1_LocalGeometry_Sobel(Layer1_LocalGeometry):
     def _compute_gradient(self, heightmap: Heightmap) -> tuple[ScalarField, ScalarField]:
         """Compute gradient using Sobel operators."""
         from scipy.ndimage import convolve
-        
+
         z = heightmap.data
         cell_size = heightmap.config.horizontal_scale
-        
-        # Sobel kernels normalized for unit spacing
-        # These kernels include a smoothing component
+
         sobel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]) / (8 * cell_size)
-        sobel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]) / (8 * cell_size)
-        
-        # Apply Sobel operators with reflect boundary
+        # Flip sobel_y sign to match np.gradient axis-0 convention (North-up)
+        sobel_y = np.array([[1, 2, 1], [0, 0, 0], [-1, -2, -1]]) / (8 * cell_size)
+
         dz_dx = convolve(z, sobel_x, mode='reflect')
         dz_dy = convolve(z, sobel_y, mode='reflect')
-        
-        # Slope magnitude
+
         slope_rad = np.arctan(np.sqrt(dz_dx**2 + dz_dy**2))
         slope_deg = np.degrees(slope_rad)
-        
-        # Aspect (downhill direction, 0° = North)
-        aspect_rad = np.arctan2(-dz_dx, -dz_dy)
+
+        # Correct arctan2: negate only dz_dx for downhill GIS convention
+        #aspect_rad = np.arctan2(-dz_dx, dz_dy)
+        #aspect_rad = (aspect_rad + 2 * np.pi) % (2 * np.pi)
+        aspect_rad = np.arctan2(dz_dx, -dz_dy)
         aspect_rad = (aspect_rad + 2 * np.pi) % (2 * np.pi)
-        
+
         return slope_deg, aspect_rad

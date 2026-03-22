@@ -1,12 +1,5 @@
 """
 Layer 0 Calibration Test — Invariant Tests + Calibration
-
-Imports from real pipeline modules (core.py, calibration.py).
-No local model redefinitions.
-
-Output: [L0|test].......[GOOD/FAIL]
-        On FAIL: newline + tab shows expected | obtained | why
-Usage: python calibrate_layer0.py
 """
 
 import numpy as np
@@ -141,10 +134,14 @@ def t_coords() -> Tuple[bool, str, str, str]:
         NormalizationConfig(h_scale, 0.2, 0.0)
     )
     
-    o = calibrated.pixel_to_world((0, 0))
-    s = calibrated.pixel_to_world((1, 0))
-    ok = abs(o[0]) < 1e-6 and abs(s[0] - h_scale) < 1e-6
-    return ok, f"origin=(0,0), step=({h_scale},0)", f"origin={o}, step={s}", \
+    o  = calibrated.pixel_to_world((0, 0))
+    sx = calibrated.pixel_to_world((1, 0))
+    sy = calibrated.pixel_to_world((0, 1))
+    ok = (abs(o[0]) < 1e-6 and abs(o[1]) < 1e-6
+          and abs(sx[0] - h_scale) < 1e-6
+          and abs(sy[1] - h_scale) < 1e-6)
+    return ok, f"origin=(0,0), x-step=({h_scale},0), y-step=(0,{h_scale})", \
+           f"origin={o}, x-step={sx}, y-step={sy}", \
            "Transform bug" if not ok else ""
 
 

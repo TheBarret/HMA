@@ -1,26 +1,18 @@
 """
 Layer 2: Regional Geometry — Invariant Tests + Calibration
-
-Imports from the real pipeline modules (core.py, rgeometry.py).
-No local model redefinitions.
-
-Output: [L2|test].......[GOOD/FAIL]
-        On FAIL: newline + tab shows expected | obtained | why
-Usage: python calibrate_layer2.py
 """
 
 import numpy as np
 from typing import Tuple
 
-from core import Heightmap, NormalizationConfig, PipelineConfig
+from core import Heightmap, NormalizationConfig, PipelineConfig, GameScaling
 from rgeometry import Layer2_RegionalGeometry
 
 
-# ─── Synthetic Surface Helpers ───────────────────────────────────────────────
+# ─── Synthetic Surface Helpers ────────────────────────────────────────────────
 #
-# Amplitudes are chosen so that the resulting K sits well above the adaptive
-# k_epsilon_min (3.7e-5 by default).  Paraboloid/hyperboloid with a=0.01
-# gives K = 4a² = 4e-4, which is ~10× above the minimum.
+# Amplitudes are chosen so K sits well above the adaptive k_epsilon_min.
+# Paraboloid/hyperboloid with a=0.01 gives K = 4a² = 4e-4 ≈ 10× k_epsilon_min.
 
 def _make_heightmap(Z: np.ndarray, h_scale: float = 2.0) -> Heightmap:
     cfg = NormalizationConfig(horizontal_scale=h_scale, vertical_scale=0.1)
@@ -52,9 +44,9 @@ def make_hyperboloid(shape=(64, 64), h_scale=2.0, a=0.01):
 
 def make_sphere_cap(shape=(64, 64), h_scale=2.0, R=100.0):
     """z = √(R²-x²-y²)  →  H = 1/R, K = 1/R²"""
-    H, W = shape
+    H_sz, W = shape
     x = np.arange(W) * h_scale - W * h_scale / 2
-    y = np.arange(H) * h_scale - H * h_scale / 2
+    y = np.arange(H_sz) * h_scale - H_sz * h_scale / 2
     X, Y = np.meshgrid(x, y)
     mask = X**2 + Y**2 < R**2
     Z = np.zeros_like(X)
@@ -63,7 +55,7 @@ def make_sphere_cap(shape=(64, 64), h_scale=2.0, R=100.0):
 
 
 def make_cylinder(shape=(64, 64), h_scale=2.0, a=0.01):
-    """z = a·x²  →  K = 0  (curved in x, flat in y — should classify FLAT)"""
+    """z = a·x²  →  K = 0  (curved in x only — should classify FLAT)"""
     X, Y = _grid(shape, h_scale)
     return _make_heightmap(a * X**2, h_scale)
 
@@ -73,19 +65,17 @@ def make_flat(shape=(64, 64), h_scale=2.0):
     return _make_heightmap(np.zeros(shape), h_scale)
 
 
-# ─── Tests ───────────────────────────────────────────────────────────────────
-
 def t_analytical_h() -> Tuple[bool, str, str, str]:
-    """Mean curvature H on paraboloid matches analytical value."""
+    """Mean curvature H on paraboloid matches analytical value within 5%."""
     h_scale, a = 2.0, 0.01
     layer = Layer2_RegionalGeometry(PipelineConfig())
     result = layer.execute(make_paraboloid(h_scale=h_scale, a=a))
 
-    analytical_H = 2 * a  # = 0.02
+    analytical_H = 2 * a
     measured_H = float(np.nanmean(np.abs(result["curvature"][10:-10, 10:-10])))
     err_pct = abs(measured_H - analytical_H) / analytical_H * 100
 
-    ok = err_pct < 5.0  # finite differences should be <1% on a smooth paraboloid
+    ok = err_pct < 5.0
     return (
         ok,
         f"H ≈ {analytical_H:.4f} (±5%)",
@@ -95,12 +85,12 @@ def t_analytical_h() -> Tuple[bool, str, str, str]:
 
 
 def t_analytical_k() -> Tuple[bool, str, str, str]:
-    """Gaussian curvature K on hyperboloid has correct sign and magnitude."""
+    """Gaussian curvature K on hyperboloid has correct sign and magnitude within 10%."""
     h_scale, a = 2.0, 0.01
     layer = Layer2_RegionalGeometry(PipelineConfig())
     result = layer.execute(make_hyperboloid(h_scale=h_scale, a=a))
 
-    analytical_K = -4 * a**2  # = -4e-4
+    analytical_K = -4 * a**2
     measured_K = float(np.nanmean(result["gaussian_curvature"][10:-10, 10:-10]))
     sign_ok = np.sign(measured_K) == np.sign(analytical_K)
     mag_err = abs(abs(measured_K) - abs(analytical_K)) / abs(analytical_K) * 100
@@ -120,7 +110,7 @@ def t_analytical_k_sphere() -> Tuple[bool, str, str, str]:
     layer = Layer2_RegionalGeometry(PipelineConfig())
     result = layer.execute(make_sphere_cap(h_scale=h_scale, R=R))
 
-    analytical_K = 1.0 / R**2  # = 1e-4
+    analytical_K = 1.0 / R**2
     interior = result["gaussian_curvature"][10:-10, 10:-10]
     measured_K = float(np.nanmean(interior[~np.isnan(interior)]))
     sign_ok = measured_K > 0
@@ -136,7 +126,7 @@ def t_analytical_k_sphere() -> Tuple[bool, str, str, str]:
 
 
 def t_classification_rules() -> Tuple[bool, str, str, str]:
-    """Each canonical surface classifies correctly on reliable interior pixels."""
+    """Each canonical surface classifies correctly on interior pixels (>70%)."""
     h_scale = 2.0
     layer = Layer2_RegionalGeometry(PipelineConfig())
 
@@ -165,7 +155,7 @@ def t_classification_rules() -> Tuple[bool, str, str, str]:
 
 
 def t_epsilon_scales_with_terrain() -> Tuple[bool, str, str, str]:
-    """Adaptive epsilon is larger for steeper terrain."""
+    """Adaptive epsilon grows with terrain amplitude."""
     h_scale = 2.0
     layer_steep  = Layer2_RegionalGeometry(PipelineConfig())
     layer_gentle = Layer2_RegionalGeometry(PipelineConfig())
@@ -200,23 +190,18 @@ def t_flat_surface_all_flat() -> Tuple[bool, str, str, str]:
 
 
 def t_output_schema() -> Tuple[bool, str, str, str]:
-    """Output dict contains all required keys with correct array shapes."""
+    """Output dict has all required keys with shapes matching input."""
     layer = Layer2_RegionalGeometry(PipelineConfig())
     hm = make_paraboloid()
     result = layer.execute(hm)
 
     required = {"curvature", "gaussian_curvature", "curvature_type"}
     missing = required - set(result.keys())
-    shape_ok = (
-        result["curvature"].shape == hm.data.shape
-        and result["gaussian_curvature"].shape == hm.data.shape
-        and result["curvature_type"].shape == hm.data.shape
-    )
+    shape_ok = all(result[k].shape == hm.data.shape for k in required if k in result)
     ok = not missing and shape_ok
     obtained = (
         f"keys={set(result.keys())}, shapes match={shape_ok}"
-        if not missing
-        else f"missing keys: {missing}"
+        if not missing else f"missing keys: {missing}"
     )
     return (
         ok,
@@ -227,10 +212,10 @@ def t_output_schema() -> Tuple[bool, str, str, str]:
 
 
 def t_epsilon_bounds() -> Tuple[bool, str, str, str]:
-    """Adaptive epsilon respects configured minimums."""
+    """Adaptive epsilon never falls below configured minimums (flat terrain edge case)."""
     cfg = PipelineConfig()
     layer = Layer2_RegionalGeometry(cfg)
-    layer.execute(make_flat())  # flat → anchor = 0 → falls back to minimums
+    layer.execute(make_flat())  # flat → p95(|H|) = 0 → must fall back to minimums
 
     h_eps, k_eps = layer._epsilon_used
     h_ok = h_eps >= cfg.curvature_epsilon_h_min
@@ -238,114 +223,178 @@ def t_epsilon_bounds() -> Tuple[bool, str, str, str]:
     ok = h_ok and k_ok
     return (
         ok,
-        f"h_eps ≥ {cfg.curvature_epsilon_h_min}, k_eps ≥ {cfg.curvature_epsilon_k_min}",
+        f"h_eps ≥ {cfg.curvature_epsilon_h_min:.2e}, k_eps ≥ {cfg.curvature_epsilon_k_min:.2e}",
         f"h_eps={h_eps:.6f}, k_eps={k_eps:.6f}",
         "Epsilon fell below configured minimum" if not ok else "",
     )
 
+def t_all_branches() -> Tuple[bool, str, str, str]:
+    """
+    Exercises all four curvature classes using three canonical surfaces
+    stitched into quadrants of a single heightmap.
+    Top-left:  paraboloid  → CONVEX
+    Top-right: inv. paraboloid → CONCAVE
+    Bottom:    hyperboloid → SADDLE
+    Corners outside stitching zone → FLAT
+    """
+    h_scale, a = 2.0, 0.01
+    cfg = PipelineConfig()
+    layer = Layer2_RegionalGeometry(cfg)
+    shape = (64, 64)
+    X, Y = _grid(shape, h_scale)
 
-# ─── Calibration Output ──────────────────────────────────────────────────────
+    Z = np.zeros(shape, dtype=np.float32)
+    H, W = shape
+    qh, qw = H // 2, W // 2
 
-def _calibration_report(layer: Layer2_RegionalGeometry, hm: Heightmap) -> None:
-    """Print epsilon summary with terrain context."""
-    if layer._epsilon_used is None:
-        print("  (no execute() call recorded)")
-        return
-    
+    # Top-left: convex paraboloid
+    Z[:qh, :qw] = a * (X[:qh, :qw]**2 + Y[:qh, :qw]**2)
+    # Top-right: concave (inverted) paraboloid
+    Z[:qh, qw:] = -a * (X[:qh, qw:]**2 + Y[:qh, qw:]**2)
+    # Bottom: saddle (hyperboloid)
+    Z[qh:, :]   =  a * (X[qh:, :]**2  - Y[qh:, :]**2)
+
+    hm = _make_heightmap(Z, h_scale)
+    result = layer.execute(hm)
     h_eps, k_eps = layer._epsilon_used
-    
-    # Characterize the terrain
-    z = hm.data
-    elev_range = z.max() - z.min()
-    avg_slope = np.mean(np.gradient(z, hm.config.horizontal_scale)[0]**2 + 
-                        np.gradient(z, hm.config.horizontal_scale)[1]**2)**0.5
-    avg_slope_deg = np.degrees(np.arctan(avg_slope))
-    
-    # Contextual interpretation
-    if elev_range < 10:
-        terrain_type = "low-relief (hills, plains)"
-    elif elev_range < 50:
-        terrain_type = "moderate-relief (rolling hills, valleys)"
-    else:
-        terrain_type = "high-relief (mountains, deep valleys)"
-    
-    if avg_slope_deg < 10:
-        slope_desc = "gentle"
-    elif avg_slope_deg < 25:
-        slope_desc = "moderate"
-    else:
-        slope_desc = "steep"
-    
-    print(f"\n  Terrain context:")
-    print(f"    Type: {terrain_type} (elev range={elev_range:.1f}m)")
-    print(f"    Slope: {slope_desc} (avg={avg_slope_deg:.1f}°)")
-    print(f"\n  Adaptive epsilon thresholds:")
-    print(f"    h_epsilon = {h_eps:.6f} (1/m) — min mean curvature to count as CONVEX/CONCAVE")
-    print(f"    k_epsilon = {k_eps:.8f} (1/m²) — min Gaussian curvature to count as SADDLE")
-    print(f"\n  Interpretation:")
-    if h_eps < 0.005:
-        print(f"    • Low h_epsilon → even gentle convex/concave features will be detected")
-    elif h_eps < 0.02:
-        print(f"    • Moderate h_epsilon → only distinct ridges/valleys will be detected")
-    else:
-        print(f"    • High h_epsilon → only sharp, well-defined features will be detected")
-    
-    if k_eps < 1e-4:
-        print(f"    • Low k_epsilon → subtle saddles (potential chokepoints) will be detected")
-    else:
-        print(f"    • High k_epsilon → only pronounced saddles (mountain passes) will be detected")
-    
-    print(f"\n  Suggested PipelineConfig overrides for this terrain:")
-    print(f"    curvature_epsilon_h_min = {h_eps * 0.5:.2e}")
-    print(f"    curvature_epsilon_k_min = {k_eps * 0.5:.2e}")
+    ct = result["curvature_type"]
+
+    # Sample well inside each quadrant away from boundaries
+    m = 8  # margin from edges and seams
+    convex_mask  = np.zeros(shape, bool); convex_mask[m:qh-m,   m:qw-m]  = True
+    concave_mask = np.zeros(shape, bool); concave_mask[m:qh-m,  qw+m:W-m] = True
+    saddle_mask  = np.zeros(shape, bool); saddle_mask[qh+m:H-m, m:W-m]   = True
+
+    regions = [
+        ("CONVEX",  convex_mask,  "CONVEX",  "lower h_factor or curvature_epsilon_h_min"),
+        ("CONCAVE", concave_mask, "CONCAVE", "lower h_factor or curvature_epsilon_h_min"),
+        ("SADDLE",  saddle_mask,  "SADDLE",  "lower k_factor or curvature_epsilon_k_min"),
+    ]
+
+    failures = []
+    details = []
+    for name, mask, expected, hint in regions:
+        if not np.any(mask):
+            details.append(f"{name}: no pixels sampled")
+            failures.append(name)
+            continue
+        pct = float(np.mean(ct[mask] == expected) * 100)
+        details.append(f"{name}={pct:.0f}%")
+        if pct < 70.0:
+            failures.append(f"{name} ({pct:.0f}% — hint: {hint}  "
+                            f"[h_eps={h_eps:.5f}, k_eps={k_eps:.6f}])")
+
+    ok = len(failures) == 0
+    return (
+        ok,
+        "all 3 non-flat regions >70% correct",
+        "; ".join(details),
+        "Failed: " + " | ".join(failures) if not ok else "",
+    )
 
 
-# ─── Runner ──────────────────────────────────────────────────────────────────
+# ─── Calibration Report ───────────────────────────────────────────────────────
+#
+# Interprets the epsilon values in terms of the game's physical constraints.
+# Uses GameScaling to derive the maximum physically possible curvature for
+# the configured game type — epsilons are then expressed as a fraction of that
+# maximum, which is the only meaningful way to read them.
+
+def _calibration_report(cfg: PipelineConfig, h_eps: float, k_eps: float) -> None:
+    gs = GameScaling.for_game(cfg.game_type)
+
+    # Physical upper bounds on curvature from game scaling
+    # H_max: slope changes from 0 → max_traversable over 2 pixels (sharpest realistic feature)
+    # K_max: worst-case saddle ≈ H_max² (both principal curvatures at maximum)
+    h_max = np.tan(np.radians(gs.vehicle_climb_angle_deg)) / (2 * gs.horizontal_scale_m_per_px)
+    k_max = h_max ** 2
+    elev_range_max = 255 * gs.vertical_scale_m_per_unit
+
+    h_pct = h_eps / h_max * 100
+    k_pct = k_eps / k_max * 100
+
+    def sensitivity(pct):
+        if pct < 3:  return "high   (subtle features detected)"
+        if pct < 10: return "medium (distinct features only)"
+        return            "low    (only sharp features detected)"
+
+    print(f"\n  Game profile: {cfg.game_type.value}")
+    print(f"    Pixel resolution : {gs.horizontal_scale_m_per_px:.1f} m/px")
+    print(f"    Elevation range  : 0 – {elev_range_max:.0f} m  (255 × {gs.vertical_scale_m_per_unit} m/unit)")
+    print(f"    Vehicle climb    : {gs.vehicle_climb_angle_deg:.0f}°"
+          f"  →  H_max = {h_max:.4f} /m,  K_max = {k_max:.5f} /m²")
+
+    print(f"\n  Epsilon thresholds (from last execute):")
+    print(f"    h_epsilon = {h_eps:.5f} /m   ({h_pct:.1f}% of H_max)  sensitivity: {sensitivity(h_pct)}")
+    print(f"    k_epsilon = {k_eps:.6f} /m²  ({k_pct:.1f}% of K_max)  sensitivity: {sensitivity(k_pct)}")
+
+    print(f"\n  Context:")
+    slope_change = h_eps * gs.horizontal_scale_m_per_px
+    print(f"    Ridge/valley seeds : |H| > {h_eps:.5f} /m"
+          f"  (~{slope_change:.3f} m/m slope-change per pixel)")
+    print(f"    Saddle seeds       : K < -{k_eps:.6f} /m²"
+          f"  (pass-like feature threshold)")
+
+    # Warn if either epsilon is pinned to the floor
+    if abs(h_eps - cfg.curvature_epsilon_h_min) < 1e-8:
+        print(f"\n   h_epsilon is at the configured minimum ({cfg.curvature_epsilon_h_min:.2e}).")
+        print(f"     Calibration surface was too flat to anchor an adaptive threshold.")
+        print(f"     Run on a representative terrain sample for accurate thresholds.")
+    if abs(k_eps - cfg.curvature_epsilon_k_min) < 1e-8:
+        print(f"\n   k_epsilon is at the configured minimum ({cfg.curvature_epsilon_k_min:.2e}).")
+        print(f"     Saddle detection threshold is a floor estimate only.")
+
+    print(f"\n  Suggested PipelineConfig overrides for {cfg.game_type.value}:")
+    print(f"    curvature_epsilon_h_min = {h_eps * 0.5:.2e}  # half current threshold")
+    print(f"    curvature_epsilon_k_min = {k_eps * 0.5:.2e}  # half current threshold")
+
+
+# ─── Runner ───────────────────────────────────────────────────────────────────
 
 def run():
     print("\n[L2] Regional Geometry Tests + Calibration")
     print("-" * 60)
 
     tests = [
-        ("analytical_h",          t_analytical_h),
-        ("analytical_k",          t_analytical_k),
-        ("analytical_k_sphere",   t_analytical_k_sphere),
-        ("classification",        t_classification_rules),
-        ("epsilon_scaling",       t_epsilon_scales_with_terrain),
-        ("flat_all_flat",         t_flat_surface_all_flat),
-        ("output_schema",         t_output_schema),
-        ("epsilon_bounds",        t_epsilon_bounds),
+        ("analytical_h",        t_analytical_h),
+        ("analytical_k",        t_analytical_k),
+        ("analytical_k_sphere", t_analytical_k_sphere),
+        ("classification",      t_classification_rules),
+        ("epsilon_scaling",     t_epsilon_scales_with_terrain),
+        ("flat_all_flat",       t_flat_surface_all_flat),
+        ("output_schema",       t_output_schema),
+        ("epsilon_bounds",      t_epsilon_bounds),
+        ("curvature_test",      t_all_branches)
     ]
 
     all_ok = True
     calibration_layer = None
-    calibration_hm = None  # ← ADD: store the heightmap used for calibration
 
     for name, fn in tests:
         ok, exp, got, why = fn()
         status = "GOOD" if ok else "FAIL"
-        print(f"[L2|{name:24}].......[{status}]", end="")
+        print(f"[L2|{name:22}].......[{status}]", end="")
         if not ok:
             all_ok = False
             print(f"\n\texpected: {exp}\n\tobtained: {got}\n\twhy:      {why}")
         else:
             print()
-        
-        if name == "classification":
-            h_scale = 2.0
-            hm = make_paraboloid(h_scale=h_scale, a=0.01)
-            temp_layer = Layer2_RegionalGeometry(PipelineConfig())
-            temp_layer.execute(hm)
-            calibration_layer = temp_layer
-            calibration_hm = hm
 
+        # Anchor the calibration report to a representative ARMA-scale terrain,
+        # not a degenerate test fixture.  Done once after epsilon_scaling runs.
+        if name == "epsilon_scaling":
+            calibration_layer = Layer2_RegionalGeometry(PipelineConfig())
+            calibration_layer.execute(make_paraboloid(a=0.01))
+
+    cfg = PipelineConfig()
     print("\n" + "-" * 60)
     print("[L2|CALIBRATION OUTPUT]")
     print("-" * 60)
-    if calibration_layer is not None and calibration_hm is not None:
-        _calibration_report(calibration_layer, calibration_hm)
+    if calibration_layer is not None and calibration_layer._epsilon_used is not None:
+        h_eps, k_eps = calibration_layer._epsilon_used
+        _calibration_report(cfg, h_eps, k_eps)
     else:
-        print("  (No calibration data available — run classification test first)")
+        print("  (no calibration data — epsilon_scaling test did not run)")
     print("-" * 60)
     print(f"[SUMMARY] {'PASS' if all_ok else 'FAILED'}\n")
     return all_ok

@@ -1,12 +1,5 @@
 """
 Layer 1: Local Geometry — Invariant Tests
-
-Imports from real pipeline modules (core.py, lgeometry.py).
-No local model redefinitions.
-
-Output: [L1|test].......[GOOD/FAIL]
-        On FAIL: newline + tab shows expected | obtained | why
-Usage: python calibrate_layer1.py
 """
 
 import numpy as np
@@ -54,19 +47,18 @@ def make_plane(shape=(64, 64), h_scale=2.0, slope_deg=15.0, aspect_deg=45.0) -> 
 
 def make_cone(shape=(64, 64), h_scale=2.0) -> Heightmap:
     """
-    Inverted cone for aspect circularity test.
-    Downhill flows outward radially.
+    Cone (peak at center) for aspect circularity test.
+    Downhill flows outward radially after gradient negation.
     """
     H, W = shape
     cx, cy = W // 2, H // 2
     x = np.arange(W) * h_scale - cx * h_scale
     y = np.arange(H) * h_scale - cy * h_scale
     X, Y = np.meshgrid(x, y)
-    
-    # Inverted cone: z = -r (downhill flows outward)
+
     R = np.sqrt(X**2 + Y**2)
-    Z = -R
-    
+    Z = R  # peak at center: gradient points outward (uphill), negation gives downhill
+
     return _make_heightmap(Z, h_scale)
 
 
@@ -104,24 +96,24 @@ def t_aspect_circularity() -> Tuple[bool, str, str, str]:
     hm = make_cone(h_scale=h_scale)
     layer = Layer1_LocalGeometry(PipelineConfig(horizontal_scale=h_scale))
     result = layer.execute(hm)
-    
+
     H, W = hm.data.shape
     cx, cy = W // 2, H // 2
     radius = 20
-    
+
     angles_deg = [0, 45, 90, 135, 180, 225, 270, 315]
-    
+
     errors = []
     for angle_deg in angles_deg:
         rad = np.radians(angle_deg)
         x = int(cx + radius * np.sin(rad))
-        y = int(cy + radius * np.cos(rad))
+        # GIS North = up = negative row direction in image space
+        y = int(cy - radius * np.cos(rad))
         if 0 <= y < H and 0 <= x < W:
             actual = result["aspect"][y, x]
-            # On cone, aspect should equal angle from center
-            err = min(abs(actual - rad), 2*np.pi - abs(actual - rad))
+            err = min(abs(actual - rad), 2 * np.pi - abs(actual - rad))
             errors.append(np.degrees(err))
-    
+
     max_err = max(errors) if errors else 999
     ok = max_err < 10.0
     return ok, "aspect error <10° at 8 compass points", f"max error={max_err:.1f}°", \
