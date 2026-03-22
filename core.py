@@ -650,6 +650,21 @@ class ScaledTransform:
         return (pixel[0] * self.scale + self.offset_x,
                 pixel[1] * self.scale + self.offset_y)
                 
+
+@dataclass(frozen=True)
+class AffineTransform:
+    """
+    Serializable pixel → world coordinate transform (full affine, 6-parameter).
+    Replaces the affine lambda closure which cannot be pickled or saved to disk.
+    Parameters match the [a b tx; c d ty] convention.
+    """
+    a: float; b: float; tx: float
+    c: float; d: float; ty: float
+
+    def __call__(self, pixel) -> tuple:
+        x, y = pixel
+        return (self.a * x + self.b * y + self.tx,
+                self.c * x + self.d * y + self.ty)
                 
 """
 
@@ -725,18 +740,20 @@ class PipelineConfig:
     flat_threshold_deg: float = 1.0
     
     # Layer 2: Curvature
-    adaptive_epsilon: bool = True
-    curvature_epsilon_h_factor: float = 0.8      # 80% of std - less sensitive
-    curvature_epsilon_k_factor: float = 0.8      # 80% of std - less sensitive  
-    curvature_epsilon_h_min: float = 1e-5
-    curvature_epsilon_k_min: float = 1e-5
-    curvature_epsilon: float = 0.01  # static fallback
+    curvature_epsilon: float = 0.0001            # static fallback
+    
+    adaptive_epsilon = True
+    curvature_epsilon_h_factor = 0.6  # (0.6 = rollign hills)
+    curvature_epsilon_k_factor = 0.6
+    curvature_epsilon_h_min = 1.38e-03
+    curvature_epsilon_k_min = 3.70e-05
+    
     
     # Layer 3: Topology 
     peak_annular_inner_m: float = 5.0
     peak_annular_outer_m: float = 12.0
-    peak_confidence_threshold: float = 0.01
-    min_peak_size_px: int = 1            # keep 1 — local_maxima returns 1px plateaus
+    peak_confidence_threshold: float = 0.3
+    min_peak_size_px: int = 2            # keep 1 — local_maxima returns 1px plateaus
     peak_min_prominence_m: float = 2.0   # real quality gate for peaks (meters)
     peak_nms_radius_px: int = 15         # suppress duplicate peaks within this radius
     min_ridge_length_px: int = 6

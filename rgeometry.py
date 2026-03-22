@@ -19,10 +19,6 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
     
     CURVATURE_LABELS = ["FLAT", "CONVEX", "CONCAVE", "SADDLE"]
     
-    #def __init__(self, config: PipelineConfig, adaptive_epsilon: bool = False):
-    #    super().__init__(config)
-    #    self.adaptive_epsilon = adaptive_epsilon
-    #    self._epsilon_used: Optional[tuple[float, float]] = None
     def __init__(self, config: PipelineConfig):
         super().__init__(config)
         self.adaptive_epsilon = config.adaptive_epsilon  # Read from config
@@ -113,8 +109,6 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         
         return H, K
     
-    # In rgeometry.py - Replace lines 94-115
-
     def _get_epsilon(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
         """
         Return (h_epsilon, k_epsilon) — independent thresholds for H and K.
@@ -146,9 +140,7 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         print(f"_compute_adaptive_epsilon(post): h_epsilon={h_epsilon:.6f}, k_epsilon={k_epsilon:.6f}")
         return h_epsilon, k_epsilon
     
-    def _classify_curvature(
-        self, H: ScalarField, K: ScalarField, h_epsilon: float, k_epsilon: float
-    ) -> np.ndarray:
+    def _classify_curvature(self, H: ScalarField, K: ScalarField, h_epsilon: float, k_epsilon: float) -> np.ndarray:
         """Classify using independent H and K thresholds."""
         H = np.asarray(H)
         K = np.asarray(K)
@@ -169,9 +161,7 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         
         return result
     
-    def _log_classification_stats(
-        self, curvature_type: np.ndarray, h_epsilon: float, k_epsilon: float
-    ) -> None:
+    def _log_classification_stats(self, curvature_type: np.ndarray, h_epsilon: float, k_epsilon: float) -> None:
         """Log classification statistics."""
         total        = curvature_type.size
         flat_count   = np.sum(curvature_type == "FLAT")
@@ -182,11 +172,11 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         non_flat = convex_count + concave_count + saddle_count
         if non_flat > 1000:
             print(
-                f"\nCurvature classification (H_ε={h_epsilon:.6f} 1/m, K_ε={k_epsilon:.6f} 1/m²): "
-                f"\nCONVEX={convex_count} ({100*convex_count/total:.1f}%), "
-                f"\nCONCAVE={concave_count} ({100*concave_count/total:.1f}%), "
-                f"\nSADDLE={saddle_count} ({100*saddle_count/total:.1f}%), "
-                f"\nFLAT={flat_count} ({100*flat_count/total:.1f}%)"
+                f"\n-> Curvature classification (H_ε={h_epsilon:.6f} 1/m, K_ε={k_epsilon:.6f} 1/m²): "
+                f"\n        CONVEX={convex_count} ({100*convex_count/total:.1f}%), "
+                f"\n        CONCAVE={concave_count} ({100*concave_count/total:.1f}%), "
+                f"\n        SADDLE={saddle_count} ({100*saddle_count/total:.1f}%), "
+                f"\n        FLAT={flat_count} ({100*flat_count/total:.1f}%)"
             )
     
     @property
@@ -317,9 +307,7 @@ class MultiScaleCurvatureAnalyzer:
         
         return H, K
     
-    def _classify_curvature(
-        self, H: ScalarField, K: ScalarField, h_epsilon: float, k_epsilon: float
-    ) -> np.ndarray:
+    def _classify_curvature(self, H: ScalarField, K: ScalarField, h_epsilon: float, k_epsilon: float) -> np.ndarray:
         """Classify each pixel into curvature type."""
         H = np.asarray(H)
         K = np.asarray(K)

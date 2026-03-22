@@ -10,39 +10,19 @@ import numpy as np
 from scipy import ndimage
 from typing import Optional, Callable, Tuple
 from dataclasses import dataclass
+
 import warnings
 
 from core import (
     Heightmap, 
     NormalizationConfig, 
-    RawImageInput, # (1)
+    RawImageInput,
     PixelCoord, 
     WorldCoord,
     PipelineConfig,
-    ScalarField
+    ScalarField,
+    AffineTransform
 )
-
-# (1) MOVED TO: CORE.PY
-#@dataclass
-#class RawImageInput:
-#    """
-#    Container for raw input data before calibration.
-#    
-#    Allows for flexible input sources while maintaining type safety.
-#    """
-#    data: np.ndarray  # 2D array of uint8 (0-255) grayscale values
-#    metadata: Optional[dict] = None  # Optional: georeferencing, units, etc.
-#    
-#    def validate(self) -> bool:
-#        """Validate input data format."""
-#        if not isinstance(self.data, np.ndarray):
-#            return False
-#        if self.data.ndim != 2:
-#            return False
-#        if self.data.dtype != np.uint8:
-#            return False
-#        return True
-
 
 class Layer0_Calibration:
     """
@@ -132,11 +112,7 @@ class Layer0_Calibration:
         
         # Heuristic defaults based on typical DEM data
         # In real applications, you'd want explicit calibration
-        warnings.warn(
-            "No calibration metadata provided. Using heuristic defaults. "
-            "Results may not reflect real-world units.",
-            UserWarning
-        )
+        print("No calibration metadata provided. Using heuristic defaults. Results may not reflect real-world units.")
         
         # Assume: 1 pixel = 1 meter horizontally, 1 grayscale unit = 0.1m vertically
         return NormalizationConfig(
@@ -215,10 +191,7 @@ class Layer0_Calibration:
             return affine_transform
         
         # Fallback to simple scaling
-        warnings.warn(
-            "Unrecognized georeferencing format. Using simple scaling.",
-            UserWarning
-        )
+        print("Unrecognized georeferencing format. Using simple scaling.")
         return lambda pixel: (pixel[0] * horizontal_scale, pixel[1] * horizontal_scale)
     
     def _get_origin(self, georeferencing: Optional[dict]) -> WorldCoord:
@@ -245,21 +218,20 @@ class Layer0_Calibration:
         # Warn about extreme elevation ranges
         elevation_range = elevation_data.max() - elevation_data.min()
         if elevation_range > 10000:  # 10km range
-            warnings.warn(
-                f"Extreme elevation range detected: {elevation_range:.1f}m. "
-                f"Check calibration parameters.",
-                UserWarning
-            )
+            print(f"Extreme elevation range detected: {elevation_range:.1f}m. Check calibration parameters.")
         
         # Check for artificial steps (optional)
         # This could indicate poor calibration or quantization artifacts
         hist, bin_edges = np.histogram(elevation_data, bins=50)
+        #if np.max(hist) > 0.9 * len(elevation_data.flat):
+        #    print("Elevation values appear highly quantized. Check vertical scale parameter.")
+        levation_range = elevation_data.max() - elevation_data.min()
         if np.max(hist) > 0.9 * len(elevation_data.flat):
-            warnings.warn(
-                "Elevation values appear highly quantized. "
-                "Check vertical scale parameter.",
-                UserWarning
-            )
+            if elevation_range < 0.01:
+                print("Elevation values appear highly quantized. Check vertical scale parameter.")
+            else:
+                print(f"Elevation values appear highly quantized (range={elevation_range:.2f}m but >90% in one bin). "
+                      f"vertical_scale may be too coarse for this terrain.")
 
 
 class Layer0_Calibration_With_QualityMetrics(Layer0_Calibration):
@@ -320,44 +292,4 @@ class Layer0_Calibration_With_QualityMetrics(Layer0_Calibration):
         noise_std = mad / 0.6745
         
         return float(noise_std)
-
-
-# layer0_calibration.py
-"""
-Layer 0: Calibration Module
-
-Responsible for converting raw grayscale imagery into a calibrated mathematical surface.
-This stage establishes the measurement context before any analysis begins.
-"""
-
-import numpy as np
-from scipy import ndimage
-from typing import Optional, Callable, Tuple
-from dataclasses import dataclass
-import warnings
-
-@dataclass(frozen=True)
-class ScaledTransform:
-    scale: float
-    offset_x: float = 0.0
-    offset_y: float = 0.0
-    
-    def __call__(self, pixel: PixelCoord) -> WorldCoord:
-        return (pixel[0] * self.scale + self.offset_x,
-                pixel[1] * self.scale + self.offset_y)
-
-@dataclass(frozen=True)
-class AffineTransform:
-    """
-    Serializable pixel → world coordinate transform (full affine, 6-parameter).
-    Replaces the affine lambda closure which cannot be pickled or saved to disk.
-    Parameters match the [a b tx; c d ty] convention.
-    """
-    a: float; b: float; tx: float
-    c: float; d: float; ty: float
-
-    def __call__(self, pixel) -> tuple:
-        x, y = pixel
-        return (self.a * x + self.b * y + self.tx,
-                self.c * x + self.d * y + self.ty)
 
