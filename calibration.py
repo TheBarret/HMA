@@ -39,11 +39,11 @@ class Layer0_Calibration:
         self._pixel_transform: Optional[Callable[[PixelCoord], WorldCoord]] = None
     
     def execute(
-        self, 
-        input_data: RawImageInput,
-        normalization_config: Optional[NormalizationConfig] = None,
-        georeferencing: Optional[dict] = None
-    ) -> Heightmap:
+            self, 
+            input_data,  # 'RawImageInput'-> any to allow flexibility
+            normalization_config: Optional[NormalizationConfig] = None,
+            georeferencing: Optional[dict] = None
+        ) -> Heightmap:
         """
         Convert raw image to calibrated heightmap.
         
@@ -57,7 +57,13 @@ class Layer0_Calibration:
         Returns:
             Heightmap: Clean, calibrated mathematical surface
         """
-        # 1. Validate input
+        # 1. Validate input — handle both RawImageInput and raw numpy arrays
+        if isinstance(input_data, np.ndarray):
+            # Auto-wrap raw array in RawImageInput
+            input_data = RawImageInput(data=input_data)
+        elif not hasattr(input_data, 'validate'):
+            raise TypeError(f"Expected RawImageInput or np.ndarray, got {type(input_data)}")
+        
         if not input_data.validate():
             raise ValueError("Invalid input data format")
         

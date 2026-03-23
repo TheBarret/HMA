@@ -134,7 +134,7 @@ class PipelineConfig:
     curvature_epsilon: float = 0.0001            # static fallback
     
     adaptive_epsilon = True
-    curvature_epsilon_h_factor = 0.25  # (lower = more detection)
+    curvature_epsilon_h_factor = 0.35  # (lower = more detection)
     curvature_epsilon_k_factor = 0.6
     #curvature_epsilon_h_min = 1.38e-03
     #curvature_epsilon_k_min = 3.70e-05
@@ -229,12 +229,15 @@ class RawImageInput:
     
     def validate(self) -> bool:
         """Validate input data format."""
+        # Explicitly convert all checks to Python bool (not numpy.bool_)
         if not isinstance(self.data, np.ndarray):
             return False
-        if self.data.ndim != 2:
+        if int(self.data.ndim) != 2:
             return False
         if self.data.dtype != np.uint8:
             return False
+        if not bool(np.isfinite(self.data).all()):
+            return False  # Additional: check for NaN/Inf
         return True
 
 @dataclass(frozen=True)
