@@ -5,7 +5,7 @@ A heightmap is a 2.5D scalar field: perfect geometric surface information, zero 
 below, or what the surface means. Analysis must proceed from fundamental mathematics to derived semantics.
 
 ## Input
-<img width="715" height="515" alt="heightmap" src="https://github.com/user-attachments/assets/389fef25-d30a-423a-9a26-efbcce78c48e" />
+<img width="1024" alt="heightmap" src="https://github.com/user-attachments/assets/389fef25-d30a-423a-9a26-efbcce78c48e" />
 
 ## Dependency Chain
 
@@ -19,7 +19,9 @@ Calibration → First Derivatives → Second Derivatives → Topology → Relati
 ```
 
 ## Output
-<img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/653bc92d-6f35-4d01-8fe9-0a7cae74d170" />
+
+<img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/736473f6-e60a-45f5-8c07-f68304f7f76f" />
+
 
 ## The Analysis Pipeline
 
