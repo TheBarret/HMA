@@ -7,8 +7,6 @@ from scipy import ndimage
 from typing import Optional, Callable, Tuple
 from dataclasses import dataclass
 
-import warnings
-
 from core import (
     Heightmap, 
     NormalizationConfig, 
@@ -64,32 +62,49 @@ class Layer0_Calibration:
         elif not hasattr(input_data, 'validate'):
             raise TypeError(f"Expected RawImageInput or np.ndarray, got {type(input_data)}")
         
+        if self.config.verbose:
+            print(f"[Calibration] Validating input: {type(input_data).__name__}")
+        
         if not input_data.validate():
             raise ValueError("Invalid input data format")
         
         # 2. Derive calibration parameters
         if normalization_config is None:
+            if self.config.verbose:
+                print("[Calibration] Deriving calibration from metadata")
             normalization_config = self._derive_calibration(input_data)
+        elif self.config.verbose:
+            print(f"[Calibration] Using provided calibration: h_scale={normalization_config.horizontal_scale}, v_scale={normalization_config.vertical_scale}")
         
         # 3. Define coordinate transform
+        if self.config.verbose:
+            print("[Calibration] Building coordinate transform")
         self._pixel_transform = self._build_coordinate_transform(
             georeferencing, 
             normalization_config.horizontal_scale
         )
         
         # 4. Convert to elevation values
+        if self.config.verbose:
+            print(f"[Calibration] Converting to elevation: shape={input_data.data.shape}")
         elevation_data = self._normalize_elevation(
             input_data.data, 
             normalization_config
         )
         
         # 5. Apply noise reduction (Gaussian blur)
+        if self.config.verbose and self.config.noise_reduction_sigma > 0:
+            print(f"[Calibration] Applying Gaussian blur: sigma={self.config.noise_reduction_sigma}")
         clean_elevation = self._reduce_noise(elevation_data)
         
         # 6. Validate output quality
+        if self.config.verbose:
+            print("[Calibration] Validating output surface")
         self._validate_surface(clean_elevation)
         
         # 7. Create immutable Heightmap
+        if self.config.verbose:
+            print("[Calibration] Creating Heightmap object")
         return Heightmap(
             data=clean_elevation,
             config=normalization_config,
@@ -119,8 +134,9 @@ class Layer0_Calibration:
         )
         # Heuristic defaults based on typical DEM data
         # In real applications, you'd want explicit calibration
-        print("No calibration metadata provided, using heuristic defaults.")
-        print(f" └─ horizontal_scale: {_cf.horizontal_scale}, horizontal_scale={_cf.horizontal_scale}, sea_level_offset={_cf.sea_level_offset}")
+        if self.config.verbose:
+            print("[Calibration] No calibration metadata, using heuristic defaults")
+            print(f" └─ horizontal_scale: {_cf.horizontal_scale}, horizontal_scale={_cf.horizontal_scale}, sea_level_offset={_cf.sea_level_offset}")
         
         return _cf
         
@@ -178,6 +194,8 @@ class Layer0_Calibration:
         """
         if georeferencing is None:
             # Identity: (x, y) → (x * scale, y * scale)
+            if self.config.verbose:
+                print("[Calibration] Using identity coordinate transform")
             def identity_transform(pixel: PixelCoord) -> WorldCoord:
                 x, y = pixel
                 return (x * horizontal_scale, y * horizontal_scale)
@@ -185,6 +203,8 @@ class Layer0_Calibration:
         
         # Affine transform: [a b tx; c d ty] * [x; y; 1]
         if 'affine' in georeferencing:
+            if self.config.verbose:
+                print("[Calibration] Using affine coordinate transform")
             affine = georeferencing['affine']
             def affine_transform(pixel: PixelCoord) -> WorldCoord:
                 x, y = pixel
@@ -194,7 +214,8 @@ class Layer0_Calibration:
             return affine_transform
         
         # Fallback to simple scaling
-        print("Unrecognized georeferencing format. Using simple scaling.")
+        if self.config.verbose:
+            print("[Calibration] Unrecognized georeferencing, falling back to simple scaling")
         return lambda pixel: (pixel[0] * horizontal_scale, pixel[1] * horizontal_scale)
     
     def _get_origin(self, georeferencing: Optional[dict]) -> WorldCoord:
@@ -221,7 +242,8 @@ class Layer0_Calibration:
         # Warn about extreme elevation ranges
         elevation_range = elevation_data.max() - elevation_data.min()
         if elevation_range > 10000:  # 10km range
-            print(f"Extreme elevation range detected: {elevation_range:.1f}m. Check calibration parameters.")
+            if self.config.verbose:
+                print(f"[Calibration] Extreme elevation range: {elevation_range:.1f}m")
         
         # Check for artificial steps
         # This could indicate poor calibration or quantization artifacts
@@ -229,10 +251,11 @@ class Layer0_Calibration:
         
         if np.max(hist) > 0.9 * len(elevation_data.flat):
             if elevation_range < 0.01:
-                print("Elevation values appear highly quantized. Check vertical scale parameter.")
+                if self.config.verbose:
+                    print("[Calibration] Highly quantized values - check vertical scale")
             else:
-                print(f"Elevation values appear highly quantized (range={elevation_range:.2f}m but >90% in one bin). "
-                      f"vertical_scale may be too coarse for this terrain.")
+                if self.config.verbose:
+                    print(f"[Calibration] Highly quantized values (range={elevation_range:.2f}m) - vertical scale may be too coarse")
 
 
 class Layer0_Calibration_With_QualityMetrics(Layer0_Calibration):
@@ -254,6 +277,9 @@ class Layer0_Calibration_With_QualityMetrics(Layer0_Calibration):
         Returns:
             Tuple[Heightmap, dict]: (calibrated surface, quality metrics)
         """
+        if self.config.verbose:
+            print("[Calibration] Executing with quality metrics")
+        
         heightmap = self.execute(input_data, normalization_config, georeferencing)
         
         metrics = {
@@ -274,6 +300,9 @@ class Layer0_Calibration_With_QualityMetrics(Layer0_Calibration):
             'shape': heightmap.shape
         }
         
+        if self.config.verbose:
+            print(f"[Calibration] Metrics: range={metrics['elevation_stats']['range']:.2f}m, noise={metrics['noise_estimate']:.4f}")
+        
         return heightmap, metrics
     
     def _estimate_noise_level(self, elevation_data: ScalarField) -> float:
@@ -293,4 +322,3 @@ class Layer0_Calibration_With_QualityMetrics(Layer0_Calibration):
         noise_std = mad / 0.6745
         
         return float(noise_std)
-

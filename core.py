@@ -128,32 +128,36 @@ class PipelineConfig:
     
     # Layer 1: Gradient 
     gradient_method: str = "central_difference"  # or "sobel"
-    flat_threshold_deg: float = 1.0
+    flat_threshold_deg: float = 0.5 # handle residual where aspect is undefined
     
     # Layer 2: Curvature
-    curvature_epsilon: float = 0.01            # static fallback
+    curvature_epsilon: float = 0.00001            # static fallback
     
     adaptive_epsilon = True
-    curvature_epsilon_h_factor = 0.5  # (lower = more detection)
+    curvature_epsilon_h_factor = 0.6 
     curvature_epsilon_k_factor = 0.6
     curvature_epsilon_h_min = 1e-5   
     curvature_epsilon_k_min = 1e-6   
     
-    
     # Layer 3: Topology 
     peak_annular_inner_m: float = 5.0
     peak_annular_outer_m: float = 12.0
-    peak_confidence_threshold: float = 0.3
+    
     min_peak_size_px: int = 1            # keep 1 — local_maxima returns 1px plateaus
     peak_min_prominence_m: float = 2.0   # real quality gate for peaks (meters)
-    peak_nms_radius_px: int = 15         # suppress duplicate peaks within this radius
+    peak_nms_radius_px: int = 20         # suppress duplicate peaks within this radius
+    
     min_ridge_length_px: int = 6
+    
     min_valley_length_px: int = 6
-    min_saddle_size_px: int = 50         # unused now (topographic approach)
-    min_flat_zone_size_px: int = 50
-    saddle_k_min_threshold: float = 5e-5
-    saddle_confidence_threshold: float = 0.1
+    
+    min_flat_zone_size_px: int = 250
+    
     flat_zone_slope_threshold_deg: float = 5.0
+    
+    saddle_k_min_threshold: float = 5e-5
+    saddle_confidence_threshold: float = 400    # 10 - 1000
+        
     border_margin_px: int = 10
     prominence_search_radius_m: float = 100.0
     peak_shoulder_convex_ratio: float = 0.05  # Minimum convex pixels in shoulder
@@ -321,7 +325,7 @@ class PipelineLayer(ABC, Generic[T]):
         
 
 #
-#  Layer Stubs (Contracts Only)
+#  Layer - Contracts Only
 #
 
 

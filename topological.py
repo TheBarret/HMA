@@ -32,6 +32,11 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         self._border_margin = config.border_margin_px
         self._annular_inner_px = max(3, int(5 / config.horizontal_scale))
         self._annular_outer_px = max(7, int(12 / config.horizontal_scale))
+    
+    def _log(self, msg: str) -> None:
+        """Helper for verbose logging"""
+        if self.config.verbose:
+            print(f"[Topological] {msg}")
 
     def execute(self, input_data: Dict) -> List[TerrainFeature]:
         """Extract discrete terrain features from continuous fields."""
@@ -43,43 +48,50 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         aspect = input_data.get('aspect', None)
 
         if slope is None or aspect is None:
-            warnings.warn("Slope/aspect not provided, some feature refinement will be limited")
+            if self.config.verbose:
+                self._log("Slope/aspect not provided, some feature refinement will be limited")
 
+        self._log(f"Starting feature extraction | shape={heightmap.shape}, cell_size={heightmap.config.horizontal_scale:.4f}m")
+        
         k_confidence = self._calculate_confidence_weights(gaussian_curvature)
         features = []
 
+        self._log("Extracting peaks")
         peaks = self._extract_peaks(heightmap, curvature_type, gaussian_curvature,
                                     k_confidence, mean_curvature, slope)
         features.extend(peaks)
+        self._log(f"Peaks extracted: {len(peaks)}")
 
+        self._log("Extracting ridges")
         ridges = self._extract_ridges(heightmap, curvature_type, gaussian_curvature,
                                       k_confidence, mean_curvature, slope, aspect)
         features.extend(ridges)
+        self._log(f"Ridges extracted: {len(ridges)}")
 
+        self._log("Extracting valleys")
         valleys = self._extract_valleys(heightmap, curvature_type, gaussian_curvature,
                                         k_confidence, mean_curvature, slope, aspect)
         features.extend(valleys)
+        self._log(f"Valleys extracted: {len(valleys)}")
 
+        self._log("Extracting saddles")
         saddles = self._extract_saddles(heightmap, curvature_type, gaussian_curvature,
                                         k_confidence, mean_curvature, slope)
         features.extend(saddles)
+        self._log(f"Saddles extracted: {len(saddles)}")
 
+        self._log("Extracting flat zones")
         flat_zones = self._extract_flat_zones(heightmap, curvature_type, slope)
         features.extend(flat_zones)
+        self._log(f"Flat zones extracted: {len(flat_zones)}")
 
         self._build_feature_hierarchy(features)
 
         if self.config.verbose:
-            print(f"\n=== Layer 3: Feature Extraction ===")
-            print(f"Peaks: {len(peaks)}")
-            print(f"Ridges: {len(ridges)}")
-            print(f"Valleys: {len(valleys)}")
-            print(f"Saddles: {len(saddles)}")
-            print(f"Flat zones: {len(flat_zones)}")
-            print(f"Total features: {len(features)}")
+            self._log(f"Extraction complete | total={len(features)}, peaks={len(peaks)}, ridges={len(ridges)}, valleys={len(valleys)}, saddles={len(saddles)}, flat_zones={len(flat_zones)}")
             if peaks:
                 avg_confidence = np.mean([p.metadata.get('confidence', 0) for p in peaks])
-                print(f"Average peak confidence: {avg_confidence:.3f}")
+                self._log(f"Average peak confidence: {avg_confidence:.3f}")
 
         return features
 
@@ -97,10 +109,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
 
     def _is_curvature(self, arr: np.ndarray, ctype: CurvatureType) -> np.ndarray:
         """Dtype-agnostic comparison: works for object arrays of enums AND int-encoded arrays."""
-        arr2 = np.array(["CONVEX", "FLAT", "SADDLE"], dtype='<U10')
-        #print(arr2 == CurvatureType.CONVEX)        # Should be [False, False, False] if BROKEN
-        #print(arr2 == CurvatureType.CONVEX.name)   # Should be [True, False, False] if FIXED
-        #print(f"_is_curvature(): {arr2 == CurvatureType.CONVEX} | {arr2 == CurvatureType.CONVEX.name}")
         return arr == ctype.name
 
     def _extract_peaks(self, heightmap, curvature_type, gaussian_curvature,
@@ -117,19 +125,16 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         regional_max_mask = morphology.local_maxima(z_smooth, connectivity=2)
         labeled_peaks, num_candidates = ndimage.label(regional_max_mask)
 
-        if self.config.verbose:
-            print(f"_extract_peaks(): regional maxima candidates={num_candidates}")
-
+        self._log(f"Peak candidates: {num_candidates} regional maxima")
+        
         if num_candidates == 0:
-            if self.config.verbose:
-                print("No regional maxima found, using elevation fallback...")
+            self._log("No regional maxima found, using elevation fallback")
             return self._extract_peaks_fallback(heightmap, slope)
 
-        #shoulder_radius_inner = max(3, int(5 / cell_size))
-        #shoulder_radius_outer = max(7, int(12 / cell_size))
-        shoulder_radius_inner = max(2, int(3 / cell_size))   # Was 5
-        shoulder_radius_outer = max(10, int(20 / cell_size))  # Was 12
+        shoulder_radius_inner = max(2, int(3 / cell_size))
+        shoulder_radius_outer = max(10, int(20 / cell_size))
 
+        validated_count = 0
         for i in range(1, num_candidates + 1):
             peak_pixels = np.argwhere(labeled_peaks == i)
             if len(peak_pixels) < self._min_feature_size:
@@ -145,13 +150,8 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             if len(shoulder_types) < 10:
                 continue
 
-
             convex_count = np.sum(self._is_curvature(shoulder_types, CurvatureType.CONVEX))
             convex_ratio = convex_count / len(shoulder_types)
-
-            if self.config.verbose:
-                print(f"_extract_peaks(): candidate {i} convex_ratio={convex_ratio:.2f}, "
-                      f"shoulder_samples={len(shoulder_types)}")
                       
             if convex_ratio >= self.config.peak_shoulder_convex_ratio:
                 prominence = self._calculate_prominence(heightmap, (centroid_x, centroid_y))
@@ -162,10 +162,12 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                         mean_curvature, gaussian_curvature, slope,
                         method="curvature_annular"
                     ))
+                    validated_count += 1
+        
+        self._log(f"Peaks validated: {validated_count} (convex_ratio threshold={self.config.peak_shoulder_convex_ratio})")
 
         if len(peaks) == 0:
-            if self.config.verbose:
-                print("No curvature-validated peaks detected, using elevation fallback...")
+            self._log("No curvature-validated peaks detected, using elevation fallback")
             return self._extract_peaks_fallback(heightmap, slope)
 
         return peaks
@@ -182,7 +184,9 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         local_max_fallback = local_max_fallback & border_mask
 
         labeled, num_features = ndimage.label(local_max_fallback)
-
+        self._log(f"Fallback candidates: {num_features} local maxima")
+        
+        validated_count = 0
         for i in range(1, num_features + 1):
             mask = (labeled == i)
             if np.sum(mask) < self._min_feature_size * 2:
@@ -198,7 +202,9 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                     None, None, slope,
                     method="elevation_fallback"
                 ))
-
+                validated_count += 1
+        
+        self._log(f"Fallback peaks validated: {validated_count}")
         return peaks
 
     def _create_peak_feature(self, heightmap, mask, centroid_px, prominence,
@@ -236,10 +242,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         z = heightmap.data
         ridges = []
 
-        # Ridges are CONVEX in mean curvature but have NEGATIVE Gaussian curvature
-        # (one principal curvature positive, one negative along-ridge direction).
-        # Requiring gaussian_curvature > 0 incorrectly rejects all ridge pixels.
-        #convex_mask = self._is_curvature(curvature_type, CurvatureType.CONVEX)
         convex_mask = self._is_curvature(curvature_type, CurvatureType.CONVEX)
         cylindrical_mask = (
             (np.abs(mean_curvature) > self.config.curvature_epsilon_h_min) &
@@ -249,12 +251,17 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         )
         ridge_mask = convex_mask | cylindrical_mask
         
+        ridge_pixels = np.sum(ridge_mask)
+        self._log(f"Ridge mask pixels: {ridge_pixels} ({100*ridge_pixels/ridge_mask.size:.1f}%)")
+        
         cleaned = remove_small_objects(ridge_mask, min_size=self._min_feature_size)
         skeleton = skeletonize(cleaned)
         skeleton = remove_small_objects(skeleton, min_size=self._min_ridge_length)
-
         labeled, num_features = label(skeleton)
-
+        
+        self._log(f"Ridge candidates: {num_features} (min_length={self._min_ridge_length}px)")
+        
+        validated_count = 0
         for i in range(1, num_features + 1):
             mask = (labeled == i)
             ys, xs = np.where(mask)
@@ -269,7 +276,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             connected_peaks = self._find_connected_peaks(heightmap, spine_points)
             avg_slope = np.mean(slope[ys, xs]) if slope is not None else 10.0
             avg_confidence = np.mean(k_confidence[ys, xs])
-
+            
             ridge_curvatures = mean_curvature[ys, xs]
             avg_curvature = np.mean(np.abs(ridge_curvatures))
             cell_size = heightmap.config.horizontal_scale
@@ -289,7 +296,9 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             )
             ridge._avg_slope = float(avg_slope)
             ridges.append(ridge)
-
+            validated_count += 1
+        
+        self._log(f"Ridges validated: {validated_count}")
         return ridges
 
     def _extract_valleys(self, heightmap: Heightmap, curvature_type: np.ndarray,
@@ -301,12 +310,18 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         valleys = []
 
         concave_mask = self._is_curvature(curvature_type, CurvatureType.CONCAVE) & (gaussian_curvature > 0)
+        
+        valley_pixels = np.sum(concave_mask)
+        self._log(f"Valley mask pixels: {valley_pixels} ({100*valley_pixels/concave_mask.size:.1f}%)")
+        
         cleaned = remove_small_objects(concave_mask, min_size=self._min_feature_size)
         skeleton = skeletonize(cleaned)
         skeleton = remove_small_objects(skeleton, min_size=self._min_ridge_length)
-
         labeled, num_features = label(skeleton)
-
+        
+        self._log(f"Valley candidates: {num_features} (min_length={self._min_ridge_length}px)")
+        
+        validated_count = 0
         for i in range(1, num_features + 1):
             mask = (labeled == i)
             ys, xs = np.where(mask)
@@ -321,7 +336,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             avg_slope = np.mean(slope[ys, xs]) if slope is not None else 10.0
             avg_confidence = np.mean(k_confidence[ys, xs])
             drainage_area = self._estimate_drainage_area(heightmap, spine_points, aspect)
-
+            
             valley = ValleyFeature(
                 centroid=centroid_px,
                 elevation_range=elevation_range,
@@ -336,7 +351,9 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             )
             valley._avg_slope = float(avg_slope)
             valleys.append(valley)
-
+            validated_count += 1
+        
+        self._log(f"Valleys validated: {validated_count}")
         return valleys
 
     def _extract_saddles(self, heightmap: Heightmap, curvature_type: np.ndarray,
@@ -353,7 +370,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         z_smooth = ndimage.gaussian_filter(z.astype(np.float32), sigma=2.0)
         win = max(7, int(14 / heightmap.config.horizontal_scale))
         
-        # A saddle is a local MIN in one direction AND local MAX in the perpendicular
         lmin_x = (z_smooth == minimum_filter1d(z_smooth, size=win, axis=1))
         lmax_x = (z_smooth == maximum_filter1d(z_smooth, size=win, axis=1))
         lmin_y = (z_smooth == minimum_filter1d(z_smooth, size=win, axis=0))
@@ -365,13 +381,11 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         border[m:h-m, m:w-m] = True
         saddle_mask = saddle_mask & border
         
-        # Must be above sea level with meaningful elevation
         elev_floor = heightmap.config.sea_level_offset
         saddle_mask = saddle_mask & (z_smooth > elev_floor + 1.0)
         
         candidate_ys, candidate_xs = np.where(saddle_mask)
-        if self.config.verbose:
-            print(f"_extract_saddles(): directional candidates={len(candidate_xs)}, win={win}px")
+        self._log(f"Saddle candidates: {len(candidate_xs)} (win={win}px)")
         
         if len(candidate_xs) == 0:
             return saddles
@@ -388,11 +402,15 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         
         final_xs = candidate_xs[~suppressed]
         final_ys = candidate_ys[~suppressed]
-        if self.config.verbose:
-            print(f"_extract_saddles(): after NMS → {len(final_xs)} saddles")
         
+        validated_count = 0
         for cx, cy in zip(final_xs, final_ys):
             elevation = float(z[cy, cx])
+            _conf = float(abs(gaussian_curvature[cy, cx]))
+            
+            if _conf > self._saddle_confidence_threshold:
+                continue
+            
             saddle = SaddleFeature(
                 centroid=(int(cx), int(cy)),
                 elevation_range=(elevation, elevation),
@@ -406,33 +424,33 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 }
             )
             saddles.append(saddle)
+            validated_count += 1
+        
+        self._log(f"Saddles validated: {validated_count} (confidence_threshold={self._saddle_confidence_threshold})")
         return saddles
 
     def _extract_flat_zones(self, heightmap: Heightmap, curvature_type: np.ndarray,
                             slope: Optional[np.ndarray]) -> List[FlatZoneFeature]:
-        """Extract flat zones for traversability.
-
-        Primary gate is slope < threshold (exact on synthetic flat maps).
-        curvature_type == FLAT is used as an additional hint only when slope
-        is unavailable, because on perfectly flat synthetic terrain curvature
-        is numerically ~0 and the epsilon-based FLAT classification is fragile.
-        """
+        """Extract flat zones for traversability."""
         z = heightmap.data
         cell_size = heightmap.config.horizontal_scale
         flat_zones = []
 
         if slope is not None:
-            # Slope is the reliable primary signal: 0° on a perfect flat surface
             flat_mask = (slope < self.config.flat_zone_slope_threshold_deg)
         else:
-            # Fallback to curvature_type when slope is unavailable
             flat_mask = self._is_curvature(curvature_type, CurvatureType.FLAT)
 
         elev_floor = heightmap.config.sea_level_offset
         flat_mask = flat_mask & (z >= elev_floor)
+        
+        flat_pixels = np.sum(flat_mask)
+        self._log(f"Flat zone mask pixels: {flat_pixels} ({100*flat_pixels/flat_mask.size:.1f}%)")
 
         labeled, num_features = label(flat_mask)
-
+        self._log(f"Flat zone candidates: {num_features} (min_size={self.config.min_flat_zone_size_px}px)")
+        
+        validated_count = 0
         for i in range(1, num_features + 1):
             mask = (labeled == i)
             size = np.sum(mask)
@@ -471,7 +489,9 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 }
             )
             flat_zones.append(flat_zone)
-
+            validated_count += 1
+        
+        self._log(f"Flat zones validated: {validated_count}")
         return flat_zones
 
     def _estimate_drainage_area(self, heightmap: Heightmap, spine_points: List[PixelCoord],
