@@ -9,7 +9,8 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 ## Dependency Chain
 
-<img width="1024" alt="pipeline_poc" src="https://github.com/user-attachments/assets/a20e0187-3625-438a-9703-57e2e08bec8d" />
+<img width="1024" alt="pipeline_poc" src="https://github.com/user-attachments/assets/f1c82e0b-f5dd-4231-a863-38e40ae5a7e8" />
+
 
 ```
 Calibration → First Derivatives → Second Derivatives → Topology → Relations → Semantics
