@@ -97,7 +97,11 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
 
     def _is_curvature(self, arr: np.ndarray, ctype: CurvatureType) -> np.ndarray:
         """Dtype-agnostic comparison: works for object arrays of enums AND int-encoded arrays."""
-        return (arr == ctype) | (arr == ctype.value)
+        arr2 = np.array(["CONVEX", "FLAT", "SADDLE"], dtype='<U10')
+        #print(arr2 == CurvatureType.CONVEX)        # Should be [False, False, False] if BROKEN
+        #print(arr2 == CurvatureType.CONVEX.name)   # Should be [True, False, False] if FIXED
+        #print(f"_is_curvature(): {arr2 == CurvatureType.CONVEX} | {arr2 == CurvatureType.CONVEX.name}")
+        return arr == ctype.name
 
     def _extract_peaks(self, heightmap, curvature_type, gaussian_curvature,
                        k_confidence, mean_curvature, slope) -> List[PeakFeature]:
@@ -121,8 +125,10 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 print("No regional maxima found, using elevation fallback...")
             return self._extract_peaks_fallback(heightmap, slope)
 
-        shoulder_radius_inner = max(3, int(5 / cell_size))
-        shoulder_radius_outer = max(7, int(12 / cell_size))
+        #shoulder_radius_inner = max(3, int(5 / cell_size))
+        #shoulder_radius_outer = max(7, int(12 / cell_size))
+        shoulder_radius_inner = max(2, int(3 / cell_size))   # Was 5
+        shoulder_radius_outer = max(10, int(20 / cell_size))  # Was 12
 
         for i in range(1, num_candidates + 1):
             peak_pixels = np.argwhere(labeled_peaks == i)
@@ -233,8 +239,17 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         # Ridges are CONVEX in mean curvature but have NEGATIVE Gaussian curvature
         # (one principal curvature positive, one negative along-ridge direction).
         # Requiring gaussian_curvature > 0 incorrectly rejects all ridge pixels.
+        #convex_mask = self._is_curvature(curvature_type, CurvatureType.CONVEX)
         convex_mask = self._is_curvature(curvature_type, CurvatureType.CONVEX)
-        cleaned = remove_small_objects(convex_mask, min_size=self._min_feature_size)
+        cylindrical_mask = (
+            (np.abs(mean_curvature) > self.config.curvature_epsilon_h_min) &
+            (np.abs(gaussian_curvature) < self.config.curvature_epsilon_k_min) &
+            (slope is not None) &
+            (slope > self.config.flat_zone_slope_threshold_deg)
+        )
+        ridge_mask = convex_mask | cylindrical_mask
+        
+        cleaned = remove_small_objects(ridge_mask, min_size=self._min_feature_size)
         skeleton = skeletonize(cleaned)
         skeleton = remove_small_objects(skeleton, min_size=self._min_ridge_length)
 

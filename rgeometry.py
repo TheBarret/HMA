@@ -63,22 +63,32 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         }
     
     def _compute_curvature(self, z: ScalarField, cell_size: float) -> Tuple[ScalarField, ScalarField]:
-        """Compute mean and Gaussian curvature."""
+        """Compute mean and Gaussian curvature using full differential geometry formulas."""
         # First derivatives
         dz_dy, dz_dx = np.gradient(z, cell_size)
         
         # Second derivatives with symmetric mixed partial
         d2z_dy2, d2z_dxdy_1 = np.gradient(dz_dy, cell_size)
         d2z_dxdy_2, d2z_dx2 = np.gradient(dz_dx, cell_size)
-        
-        # Average mixed partial for symmetry
         d2z_dxdy = (d2z_dxdy_1 + d2z_dxdy_2) / 2.0
         
-        # Mean curvature: H = (z_xx + z_yy) / 2
-        mean_curvature = (d2z_dx2 + d2z_dy2) / 2.0
+        # Common denominator terms (account for slope magnitude)
+        denom = 1 + dz_dx**2 + dz_dy**2
+        denom_sqrt = np.sqrt(denom)
         
-        # Gaussian curvature: K = z_xx * z_yy - (z_xy)²
-        gaussian_curvature = d2z_dx2 * d2z_dy2 - d2z_dxdy * d2z_dxdy
+        # FULL Mean Curvature formula (valid for all slopes)
+        # H = [(1+fy²)fxx - 2fxfyfxy + (1+fx²)fyy] / [2(1+fx²+fy²)^(3/2)]
+        mean_curvature = (
+            (1 + dz_dy**2) * d2z_dx2 
+            - 2 * dz_dx * dz_dy * d2z_dxdy 
+            + (1 + dz_dx**2) * d2z_dy2
+        ) / (2 * denom_sqrt**3)
+        
+        # FULL Gaussian Curvature formula
+        # K = (fxx*fyy - fxy²) / (1+fx²+fy²)²
+        gaussian_curvature = (
+            d2z_dx2 * d2z_dy2 - d2z_dxdy**2
+        ) / (denom**2)
         
         return mean_curvature, gaussian_curvature
     
@@ -119,17 +129,17 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
             return eps, eps  # same value, but returned as tuple for consistency
 
     def _compute_adaptive_epsilon(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
+        """Compute adaptive thresholds using 75th percentile to avoid seam artifact inflation."""
         H_valid = H[~np.isnan(H)]
         K_valid = K[~np.isnan(K)]
 
-        # Use 95th percentile of |H| and |K| as the signal anchor.
-        # std() is dominated by the ~95% near-zero flat pixels on game maps,
-        # producing thresholds so small that noise gets classified as features.
-        # The 95th percentile sits in the actual feature signal, not the noise floor.
-        h_anchor = float(np.percentile(np.abs(H_valid), 95))
-        k_anchor = float(np.percentile(np.abs(K_valid), 95))
+        # Use 75th percentile instead of 95th.
+        # 95th sits in seam artifacts and extreme peaks, inflating thresholds.
+        # 75th sits in the "feature body" where most terrain signals live.
+        h_anchor = float(np.percentile(np.abs(H_valid), 75))  # ← Changed from 95
+        k_anchor = float(np.percentile(np.abs(K_valid), 75))  # ← Changed from 95
 
-        print(f"_compute_adaptive_epsilon(pre): H_p95={h_anchor:.6f}, K_p95={k_anchor:.6f}")
+        print(f"_compute_adaptive_epsilon(pre): H_p75={h_anchor:.6f}, K_p75={k_anchor:.6f}")
 
         h_epsilon = max(self.config.curvature_epsilon_h_factor * h_anchor,
                         self.config.curvature_epsilon_h_min)
@@ -138,7 +148,7 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
 
         print(f"_compute_adaptive_epsilon(post): h_epsilon={h_epsilon:.6f}, k_epsilon={k_epsilon:.6f}")
         return h_epsilon, k_epsilon
-    
+        
     def _classify_curvature(self, H: ScalarField, K: ScalarField, h_epsilon: float, k_epsilon: float) -> np.ndarray:
         """Classify using independent H and K thresholds."""
         H = np.asarray(H)

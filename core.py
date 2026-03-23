@@ -10,7 +10,6 @@ from typing import Callable, Generic, TypeVar, Protocol
 from dataclasses import dataclass, field, KW_ONLY
 from uuid import uuid4
 
-
 #
 # TYPES - Primitive Contracts
 #
@@ -51,6 +50,158 @@ class Traversability(Enum):
     
     def __str__(self):
         return self.name
+
+
+# #########################################
+#  * * MASTER PIPELINE CONFIG
+# all modules are reading from this config
+# #########################################
+
+
+class GameType(Enum):
+    """Supported game types for automatic scaling"""
+    ARMA_2 = "ARMA_2"                   # Typical: 1-5m resolution
+    ARMA_3 = "ARMA_3"                   # Typical: 1-10m resolution  
+    WORLD_OF_TANKS = "WORLD OF TANKS"   # Vehicle-focused, 1-2m resolution
+    WAR_THUNDER = "WARTHUNDER"          # Mixed, 1-5m resolution
+    CUSTOM = "CUSTOM"
+
+@dataclass
+class GameScaling:
+    """Game-specific scaling presets"""
+    game_type: GameType
+    horizontal_scale_m_per_px: float
+    vertical_scale_m_per_unit: float
+    vehicle_climb_angle_deg: float
+    infantry_climb_angle_deg: float
+    
+    @classmethod
+    def for_game(cls, game: GameType) -> 'GameScaling':
+        presets = {
+            GameType.ARMA_3: cls(
+                game_type=game,
+                horizontal_scale_m_per_px=2.0,    # ArmA maps: 2-5m typical
+                vertical_scale_m_per_unit=0.2,    # 0.2m per grayscale unit
+                vehicle_climb_angle_deg=30.0,     # ArmA vehicles
+                infantry_climb_angle_deg=45.0     # Infantry can climb steeper
+            ),
+            GameType.WORLD_OF_TANKS: cls(
+                game_type=game,
+                horizontal_scale_m_per_px=1.0,    # WoT: detailed 1m resolution
+                vertical_scale_m_per_unit=0.1,    # 0.1m precision
+                vehicle_climb_angle_deg=25.0,     # Tanks have limits
+                infantry_climb_angle_deg=45.0
+            ),
+            GameType.WAR_THUNDER: cls(
+                game_type=game,
+                horizontal_scale_m_per_px=1.5,    # Mixed resolution
+                vertical_scale_m_per_unit=0.15,
+                vehicle_climb_angle_deg=30.0,
+                infantry_climb_angle_deg=45.0
+            ),
+            GameType.ARMA_2: cls(
+                game_type=game,
+                horizontal_scale_m_per_px=5.0,    # Older maps larger scale
+                vertical_scale_m_per_unit=0.25,
+                vehicle_climb_angle_deg=25.0,
+                infantry_climb_angle_deg=45.0
+            ),
+            GameType.CUSTOM: cls(
+                game_type=game,
+                horizontal_scale_m_per_px=5.0,    # Custom
+                vertical_scale_m_per_unit=0.25,
+                vehicle_climb_angle_deg=25.0,
+                infantry_climb_angle_deg=45.0
+            )
+        }
+        return presets.get(game, presets[GameType.ARMA_3])
+
+@dataclass
+class PipelineConfig:
+    """Global configuration for the analysis pipeline."""
+    
+    # Layer 0: Calibration 
+    horizontal_scale: float = 2.0
+    vertical_scale: float = 0.2
+    sea_level_offset: float = 10.0
+    noise_reduction_sigma: float = 1.2
+    
+    # Layer 1: Gradient 
+    gradient_method: str = "central_difference"  # or "sobel"
+    flat_threshold_deg: float = 1.0
+    
+    # Layer 2: Curvature
+    curvature_epsilon: float = 0.0001            # static fallback
+    
+    adaptive_epsilon = True
+    curvature_epsilon_h_factor = 0.25  # (lower = more detection)
+    curvature_epsilon_k_factor = 0.6
+    #curvature_epsilon_h_min = 1.38e-03
+    #curvature_epsilon_k_min = 3.70e-05
+    curvature_epsilon_h_min = 1e-5   # Was 1e-4
+    curvature_epsilon_k_min = 1e-6   # Was 1e-5
+    
+    
+    # Layer 3: Topology 
+    peak_annular_inner_m: float = 5.0
+    peak_annular_outer_m: float = 12.0
+    peak_confidence_threshold: float = 0.3
+    min_peak_size_px: int = 2            # keep 1 — local_maxima returns 1px plateaus
+    peak_min_prominence_m: float = 2.0   # real quality gate for peaks (meters)
+    peak_nms_radius_px: int = 15         # suppress duplicate peaks within this radius
+    min_ridge_length_px: int = 6
+    min_valley_length_px: int = 6
+    min_saddle_size_px: int = 50         # unused now (topographic approach)
+    min_flat_zone_size_px: int = 50
+    saddle_k_min_threshold: float = 5e-5
+    saddle_confidence_threshold: float = 0.1
+    flat_zone_slope_threshold_deg: float = 5.0
+    border_margin_px: int = 10
+    prominence_search_radius_m: float = 100.0
+    peak_shoulder_convex_ratio: float = 0.05  # Minimum convex pixels in shoulder
+    
+    # Layer 4: Relational 
+    visibility_max_range_m: float = 1200.0
+    connection_radius_m: float = 200.0
+    viewshed_sample_step_px: int = 5
+    flow_step_px: int = 10
+    flow_neighbor_distance_px: int = 50
+    
+    # Layer 5: Tactical 
+    game_type: GameType = GameType.ARMA_3
+    defensive_min_prominence_m: float = 8.0
+    defensive_min_elevation_m: float = 5.0
+    defensive_max_slope_deg: float = 25.0
+    defensive_min_visibility: int = 5
+    observation_min_prominence_m: float = 10.0
+    observation_min_visibility: int = 10
+    assembly_min_area_m2: float = 2000.0
+    assembly_max_slope_deg: float = 5.0
+    chokepoint_min_connectivity: int = 2
+    cover_min_width_m: float = 5.0
+    
+    # Existing fields
+    cliff_threshold_degrees: float = 45.0
+    gentle_slope_threshold_degrees: float = 15.0
+    vehicle_climb_angle: float = 30.0
+    visibility_sample_radius: int = 8
+    analysis_scales: Dict[str, int] = field(default_factory=lambda: {
+        "micro": 3, "meso": 15, "macro": 50
+    })
+    
+    # Runtime
+    verbose: bool = True
+    save_intermediates: bool = False
+    
+    # Extensions
+    
+    def is_traversable(self, slope_degrees: float) -> Traversability:
+        """Classify slope by vehicle constraints."""
+        if slope_degrees > self.cliff_threshold_degrees:
+            return Traversability.BLOCKED
+        elif slope_degrees > self.vehicle_climb_angle:
+            return Traversability.DIFFICULT
+        return Traversability.FREE
     
 #
 #  Immutable Data Containers
@@ -126,50 +277,6 @@ class TerrainFeature:
     def contains_point(self, pixel: PixelCoord) -> bool:
         raise NotImplementedError
         
-
-#
-#  Pipeline Configuration
-#
-
-@dataclass
-class PipelineConfig:
-    """Global configuration for the analysis pipeline."""
-    
-    # Layer 0: Calibration
-    noise_reduction_sigma: float = 1.0  # Gaussian blur radius
-    
-    # Layer 1: Slope thresholds
-    cliff_threshold_degrees: float = 45.0
-    gentle_slope_threshold_degrees: float = 15.0
-    
-    # Layer 2: Curvature sensitivity
-    curvature_epsilon: float = 0.01  # Threshold for "near-zero" curvature
-    
-    # Layer 5: Domain rules
-    vehicle_climb_angle: float = 30.0  # Max slope for traversability
-    visibility_sample_radius: int = 8  # Rays per degree for viewshed
-    
-    # Scale-space analysis
-    analysis_scales: Dict[str, int] = field(default_factory=lambda: {
-        "micro": 3,    # 3px radius for fine detail
-        "meso": 15,    # 15px radius for tactical features  
-        "macro": 50,   # 50px radius for operational features
-    })
-    
-    
-    # Curvature tuning (for game maps)
-    curvature_epsilon_h_factor: float = 0.5      # std multiplier for H
-    curvature_epsilon_k_factor: float = 0.5      # std multiplier for K  
-    curvature_epsilon_h_min: float = 1e-5        # Minimum H threshold (1/m)
-    curvature_epsilon_k_min: float = 1e-5        # Minimum K threshold (1/m²)
-    
-    def is_traversable(self, slope_degrees: float) -> Traversability:
-        """Classify slope by vehicle constraints."""
-        if slope_degrees > self.cliff_threshold_degrees:
-            return Traversability.BLOCKED
-        elif slope_degrees > self.vehicle_climb_angle:
-            return Traversability.DIFFICULT
-        return Traversability.FREE
         
         
 #
@@ -666,143 +773,3 @@ class AffineTransform:
         return (self.a * x + self.b * y + self.tx,
                 self.c * x + self.d * y + self.ty)
                 
-"""
-
-    Config Wrappers
-   
-    TODO:
-    - Add more game templates (ideally themed combat simulators/games)
-"""
-
-class GameType(Enum):
-    """Supported game types for automatic scaling"""
-    ARMA_2 = "ARMA_2"                   # Typical: 1-5m resolution
-    ARMA_3 = "ARMA_3"                   # Typical: 1-10m resolution  
-    WORLD_OF_TANKS = "WORLD OF TANKS"   # Vehicle-focused, 1-2m resolution
-    WAR_THUNDER = "WARTHUNDER"          # Mixed, 1-5m resolution
-    CUSTOM = "CUSTOM"
-
-@dataclass
-class GameScaling:
-    """Game-specific scaling presets"""
-    game_type: GameType
-    horizontal_scale_m_per_px: float
-    vertical_scale_m_per_unit: float
-    vehicle_climb_angle_deg: float
-    infantry_climb_angle_deg: float
-    
-    @classmethod
-    def for_game(cls, game: GameType) -> 'GameScaling':
-        presets = {
-            GameType.ARMA_3: cls(
-                game_type=game,
-                horizontal_scale_m_per_px=2.0,    # ArmA maps: 2-5m typical
-                vertical_scale_m_per_unit=0.2,    # 0.2m per grayscale unit
-                vehicle_climb_angle_deg=30.0,     # ArmA vehicles
-                infantry_climb_angle_deg=45.0     # Infantry can climb steeper
-            ),
-            GameType.WORLD_OF_TANKS: cls(
-                game_type=game,
-                horizontal_scale_m_per_px=1.0,    # WoT: detailed 1m resolution
-                vertical_scale_m_per_unit=0.1,    # 0.1m precision
-                vehicle_climb_angle_deg=25.0,     # Tanks have limits
-                infantry_climb_angle_deg=45.0
-            ),
-            GameType.WAR_THUNDER: cls(
-                game_type=game,
-                horizontal_scale_m_per_px=1.5,    # Mixed resolution
-                vertical_scale_m_per_unit=0.15,
-                vehicle_climb_angle_deg=30.0,
-                infantry_climb_angle_deg=45.0
-            ),
-            GameType.ARMA_2: cls(
-                game_type=game,
-                horizontal_scale_m_per_px=5.0,    # Older maps larger scale
-                vertical_scale_m_per_unit=0.25,
-                vehicle_climb_angle_deg=25.0,
-                infantry_climb_angle_deg=45.0
-            ),
-            GameType.CUSTOM: cls(
-                game_type=game,
-                horizontal_scale_m_per_px=5.0,    # Custom
-                vertical_scale_m_per_unit=0.25,
-                vehicle_climb_angle_deg=25.0,
-                infantry_climb_angle_deg=45.0
-            )
-        }
-        return presets.get(game, presets[GameType.ARMA_3])
-        
-@dataclass
-class PipelineConfig:
-    """Global configuration for the analysis pipeline."""
-    
-    # Layer 0: Calibration 
-    horizontal_scale: float = 2.0
-    vertical_scale: float = 0.2
-    sea_level_offset: float = 10.0
-    noise_reduction_sigma: float = 1.2
-    
-    # Layer 1: Gradient 
-    gradient_method: str = "central_difference"  # or "sobel"
-    flat_threshold_deg: float = 1.0
-    
-    # Layer 2: Curvature
-    curvature_epsilon: float = 0.0001            # static fallback
-    
-    adaptive_epsilon = True
-    curvature_epsilon_h_factor = 0.6  # (0.6 = rollign hills)
-    curvature_epsilon_k_factor = 0.6
-    curvature_epsilon_h_min = 1.38e-03
-    curvature_epsilon_k_min = 3.70e-05
-    
-    
-    # Layer 3: Topology 
-    peak_annular_inner_m: float = 5.0
-    peak_annular_outer_m: float = 12.0
-    peak_confidence_threshold: float = 0.3
-    min_peak_size_px: int = 2            # keep 1 — local_maxima returns 1px plateaus
-    peak_min_prominence_m: float = 2.0   # real quality gate for peaks (meters)
-    peak_nms_radius_px: int = 15         # suppress duplicate peaks within this radius
-    min_ridge_length_px: int = 6
-    min_valley_length_px: int = 6
-    min_saddle_size_px: int = 50         # unused now (topographic approach)
-    min_flat_zone_size_px: int = 50
-    saddle_k_min_threshold: float = 5e-5
-    saddle_confidence_threshold: float = 0.1
-    flat_zone_slope_threshold_deg: float = 5.0
-    border_margin_px: int = 10
-    prominence_search_radius_m: float = 100.0
-    peak_shoulder_convex_ratio: float = 0.15  # Minimum convex pixels in shoulder
-    
-    # Layer 4: Relational 
-    visibility_max_range_m: float = 1200.0
-    connection_radius_m: float = 200.0
-    viewshed_sample_step_px: int = 5
-    flow_step_px: int = 10
-    flow_neighbor_distance_px: int = 50
-    
-    # Layer 5: Tactical 
-    game_type: GameType = GameType.ARMA_3
-    defensive_min_prominence_m: float = 8.0
-    defensive_min_elevation_m: float = 5.0
-    defensive_max_slope_deg: float = 25.0
-    defensive_min_visibility: int = 5
-    observation_min_prominence_m: float = 10.0
-    observation_min_visibility: int = 10
-    assembly_min_area_m2: float = 2000.0
-    assembly_max_slope_deg: float = 5.0
-    chokepoint_min_connectivity: int = 2
-    cover_min_width_m: float = 5.0
-    
-    # Existing fields
-    cliff_threshold_degrees: float = 45.0
-    gentle_slope_threshold_degrees: float = 15.0
-    vehicle_climb_angle: float = 30.0
-    visibility_sample_radius: int = 8
-    analysis_scales: Dict[str, int] = field(default_factory=lambda: {
-        "micro": 3, "meso": 15, "macro": 50
-    })
-    
-    # Runtime
-    verbose: bool = True
-    save_intermediates: bool = False

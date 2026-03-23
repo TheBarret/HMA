@@ -131,8 +131,10 @@ def t_ridge() -> Tuple[bool, str, str, str]:
 def t_saddle() -> Tuple[bool, str, str, str]:
     """Test: Saddle between two peaks."""
     terrain = SyntheticTerrain(size=128, h_scale=2.0, v_scale=0.2, sea_level=10.0)
-    terrain.add_peak(x=48, y=64, height=40.0, radius=12.0, shape="paraboloid")
-    terrain.add_peak(x=80, y=64, height=40.0, radius=12.0, shape="paraboloid")
+    #terrain.add_peak(x=48, y=64, height=40.0, radius=12.0, shape="paraboloid")
+    #terrain.add_peak(x=80, y=64, height=40.0, radius=12.0, shape="paraboloid")
+    terrain.add_peak(x=48, y=64, height=40.0, radius=24.0, shape="paraboloid")
+    terrain.add_peak(x=80, y=64, height=40.0, radius=24.0, shape="paraboloid") 
     # Use a small, localized saddle so it doesn't globally inflate the elevation floor.
     # influence_radius=10 keeps the hyperboloid confined to the gap between the two peaks.
     terrain.add_saddle(x=64, y=64, height=24.0, a=0.001, b=0.001, influence_radius=10.0)
@@ -141,8 +143,8 @@ def t_saddle() -> Tuple[bool, str, str, str]:
     terrain.save_png('t_saddle.png')
     
     config = PipelineConfig(game_type=GameType.CUSTOM)
-    config.curvature_epsilon_h_min = 1e-4
-    config.curvature_epsilon_k_min = 1e-5
+    config.curvature_epsilon_h_min = 1e-5
+    config.curvature_epsilon_k_min = 1e-6
     
     detected = run_full_pipeline(result, config)
     
