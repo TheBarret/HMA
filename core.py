@@ -108,7 +108,7 @@ class GameScaling:
             ),
             GameType.CUSTOM: cls(
                 game_type=game,
-                horizontal_scale_m_per_px=5.0,    # Custom
+                horizontal_scale_m_per_px=2.0,    # Custom
                 vertical_scale_m_per_unit=0.25,
                 vehicle_climb_angle_deg=25.0,
                 infantry_climb_angle_deg=45.0
@@ -131,22 +131,20 @@ class PipelineConfig:
     flat_threshold_deg: float = 1.0
     
     # Layer 2: Curvature
-    curvature_epsilon: float = 0.0001            # static fallback
+    curvature_epsilon: float = 0.01            # static fallback
     
     adaptive_epsilon = True
-    curvature_epsilon_h_factor = 0.35  # (lower = more detection)
+    curvature_epsilon_h_factor = 0.5  # (lower = more detection)
     curvature_epsilon_k_factor = 0.6
-    #curvature_epsilon_h_min = 1.38e-03
-    #curvature_epsilon_k_min = 3.70e-05
-    curvature_epsilon_h_min = 1e-5   # Was 1e-4
-    curvature_epsilon_k_min = 1e-6   # Was 1e-5
+    curvature_epsilon_h_min = 1e-5   
+    curvature_epsilon_k_min = 1e-6   
     
     
     # Layer 3: Topology 
     peak_annular_inner_m: float = 5.0
     peak_annular_outer_m: float = 12.0
     peak_confidence_threshold: float = 0.3
-    min_peak_size_px: int = 2            # keep 1 — local_maxima returns 1px plateaus
+    min_peak_size_px: int = 1            # keep 1 — local_maxima returns 1px plateaus
     peak_min_prominence_m: float = 2.0   # real quality gate for peaks (meters)
     peak_nms_radius_px: int = 15         # suppress duplicate peaks within this radius
     min_ridge_length_px: int = 6
@@ -180,7 +178,7 @@ class PipelineConfig:
     chokepoint_min_connectivity: int = 2
     cover_min_width_m: float = 5.0
     
-    # Existing fields
+    # additional fields
     cliff_threshold_degrees: float = 45.0
     gentle_slope_threshold_degrees: float = 15.0
     vehicle_climb_angle: float = 30.0

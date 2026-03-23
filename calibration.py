@@ -112,17 +112,18 @@ class Layer0_Calibration:
                 offset = input_data.metadata.get('sea_level_offset', 0.0)
                 return NormalizationConfig(h_scale, v_scale, offset)
         
+        _cf = NormalizationConfig(
+            horizontal_scale=self.config.horizontal_scale,
+            vertical_scale=self.config.vertical_scale,
+            sea_level_offset=self.config.sea_level_offset
+        )
         # Heuristic defaults based on typical DEM data
         # In real applications, you'd want explicit calibration
-        print("No calibration metadata provided. Using heuristic defaults. Results may not reflect real-world units.")
+        print("No calibration metadata provided, using heuristic defaults.")
+        print(f" └─ horizontal_scale: {_cf.horizontal_scale}, horizontal_scale={_cf.horizontal_scale}, sea_level_offset={_cf.sea_level_offset}")
         
-        # Assume: 1 pixel = 1 meter horizontally, 1 grayscale unit = 0.1m vertically
-        return NormalizationConfig(
-            horizontal_scale=1.0,
-            vertical_scale=0.1,
-            sea_level_offset=0.0
-        )
-    
+        return _cf
+        
     def _normalize_elevation(
         self, 
         raw_data: np.ndarray, 

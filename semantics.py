@@ -263,14 +263,23 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             valley.metadata['semantic_tags'] = tags
         
         # --- Classify Saddles (Chokepoints) ---
+        
         for saddle in saddles:
             tags = []
-            conn_degree = len(connectivity.get(saddle.feature_id, []))
+            # Count ridge/valley connections, not traversability edges
+            conn_degree = len(saddle.connecting_ridges) + len(saddle.connecting_valleys)
             
-            # Chokepoint detection (connectivity-based)
             if conn_degree >= thresholds["chokepoint_min_connectivity"]:
                 tags.append("chokepoint")
                 saddle.metadata['chokepoint_degree'] = conn_degree
+        
+        #for saddle in saddles:
+        #    tags = []
+        #    conn_degree = len(connectivity.get(saddle.feature_id, []))
+        # Chokepoint detection (connectivity-based)
+        #   if conn_degree >= thresholds["chokepoint_min_connectivity"]:
+        #        tags.append("chokepoint")
+        #        saddle.metadata['chokepoint_degree'] = conn_degree
             
             # Pass classification
             if saddle.elevation > 30:
@@ -334,6 +343,10 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 'total_flat_zones': len(flat_zones),
             }
         }
+        
+        # Validate classification ran
+        if self.config.verbose and not peaks[0].metadata.get('semantic_tags'):
+            print("_build_semantic_index() Peak features missing semantic_tags, required for classification")
         
         # Defensive positions
         for peak in peaks:

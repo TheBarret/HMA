@@ -129,7 +129,8 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         # Visibility is only meaningful between peaks — they are the observation/defensive
         # nodes. Saddle-to-saddle LOS is not tactically useful and with 100s of saddles
         # the O(n²) Bresenham cost dominates total pipeline time.
-        important_features = [f for f in features if isinstance(f, PeakFeature)]
+        # Include peaks, ridges, and saddles for visibility
+        important_features = [f for f in features if isinstance(f, (PeakFeature, RidgeFeature, SaddleFeature))]
         
         # Pre-compute max range in pixels for fast distance rejection
         max_range_px = self._visibility_max_range_m / heightmap.config.horizontal_scale
@@ -213,7 +214,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         
         # If no aspect, return empty network
         if aspect is None:
-            warnings.warn("Aspect not available, flow network will be empty")
+            print("Aspect not available, flow network will be empty")
             return flow_network, None
         
         # Build feature KD-tree for nearest neighbor search
@@ -227,9 +228,13 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         # Simplified: accumulate based on aspect direction
         # (Full flow accumulation would require D8 or D-infinity algorithm)
         rows, cols = heightmap.shape[1], heightmap.shape[0]  # Note: shape is (height, width)
-        
+
         # Convert aspect to flow direction vectors
         # aspect: 0 = North, π/2 = East, π = South, 3π/2 = West
+        # TODO: Replace with proper D8 flow accumulation for production
+        # Current implementation is a simplified centroid-to-centroid approximation
+        # Suitable for tactical feature graphs, not hydrological modeling
+        print("_build_flow_network() NOT IMPLEMENTED YET, USING SIMPLIFIED MODEL")
         dx = -np.sin(aspect)  # East-West component
         dy = -np.cos(aspect)  # North-South component
         
@@ -267,7 +272,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         
         # If no slope, use simple distance-based connectivity
         if slope is None:
-            warnings.warn("Slope not available, using distance-based connectivity")
+            print("Slope not available, using distance-based connectivity")
             return self._distance_based_connectivity(features)
         
         # Build feature KD-tree
@@ -374,7 +379,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         watersheds = {}
         
         if aspect is None:
-            warnings.warn("Aspect not available, watershed delineation skipped")
+            print("Aspect not available, watershed delineation skipped")
             return watersheds
         
         # Find valley features (these are potential watershed outlets)
@@ -396,6 +401,10 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
             x, y = valley.centroid
             radius = 100  # pixels
             
+            # TODO: Implement proper watershed labeling using flow accumulation
+            # Current distance-based approach is a placeholder for tactical use
+            # For hydrological accuracy, use scipy.ndimage.label on flow-direction field
+            print("_delineate_watersheds() NOT IMPLEMENTED YET, USING SIMPLIFIED MODEL")
             for f in features:
                 fx, fy = f.centroid
                 if np.sqrt((fx - x)**2 + (fy - y)**2) < radius:
