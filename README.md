@@ -9,7 +9,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 ## Dependency Chain
 
-<img width="1024" alt="pipeline_poc" src="https://github.com/user-attachments/assets/d408fd22-17e8-4d35-82ba-9e68408081c1" />
+<img width="1024" alt="debug-preview" src="https://github.com/user-attachments/assets/367d574e-4c44-42b0-b11c-0c69086d1970" />
 
 
 ```
