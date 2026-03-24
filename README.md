@@ -4,19 +4,39 @@
 A heightmap is a 2.5D scalar field: perfect geometric surface information, zero information about what lies above, 
 below, or what the surface means. Analysis must proceed from fundamental mathematics to derived semantics.
 
-## Input
-<img width="1024" alt="heightmap" src="https://github.com/user-attachments/assets/389fef25-d30a-423a-9a26-efbcce78c48e" />
+
+##  `Mean Curvature (H)` = "How bent is the surface?"  
+
+A `Large positive Surface` that bulges `outward`; Hilltop, ridge crest, nose of slope  
+A `Large negative Surface` that bulges `inward`; Valley bottom, gully, depression  
+Or `Near zero Surface` is `flat` or a  `saddle` (needs K to distinguish); Flat plain, planar slope, cylindrical ridge  
+
+## `Gaussian Curvature (K)` = "What shape is the bend?"  
+A `Positive` same sign in both directions is a Dome (peak), bowl (depression)  
+A `Negative` opposite signs is a Saddle, pass, twisted surface  
+Or a `Near zero` one direction flat can be a Ridge (curved across, flat along), valley  
 
 ## Dependency Chain
 
-<img width="1024" alt="debug-preview" src="https://github.com/user-attachments/assets/367d574e-4c44-42b0-b11c-0c69086d1970" />
-
+The plan of attack is to generate `Ground Truth Validation`  
+Using `synthetic terrain` to generate heightmaps with known features.  
+Compare detected output features against ground truth.  
 
 ```
-Calibration → First Derivatives → Second Derivatives → Topology → Relations → Semantics
-     ↓              ↓                   ↓                 ↓           ↓           ↓
-  Clean        Slope/Aspect         Curvature          Features    Networks     Meaning
+Calibration → First Derivatives → Second Derivatives → Topology  →  Relations → Semantics
+-------------------------------------------------------------------------------------------
+     ↓              ↓                   ↓                 ↓             ↓           ↓
+  Clean   →     Slope/Aspect    →    Curvature     →   Features  →  Networks  →  Meaning
 ```
+
+## Debugging the pipeline
+
+<img width="512" alt="debug-preview" src="https://github.com/user-attachments/assets/367d574e-4c44-42b0-b11c-0c69086d1970" />
+
+
+## Demonstration Input
+
+<img width="1024" alt="heightmap" src="https://github.com/user-attachments/assets/389fef25-d30a-423a-9a26-efbcce78c48e" />
 
 ## Output
 
