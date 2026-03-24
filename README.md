@@ -20,13 +20,8 @@ compare detected output features against ground truth using predefined config pa
 
 # Early Testing
 
-## Input
+<img width="1024" alt="heightmap_small_analysis" src="https://github.com/user-attachments/assets/8969e7e5-4e13-46f9-a7ab-bb0de1f445d7" />
 
-<img width="1024" alt="heightmap" src="https://github.com/user-attachments/assets/389fef25-d30a-423a-9a26-efbcce78c48e" />
-
-## Output
-
-<img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/736473f6-e60a-45f5-8c07-f68304f7f76f" />
 
 ## The Analysis Pipeline
 
