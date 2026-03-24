@@ -44,7 +44,12 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         self._viewshed_sample_step = config.viewshed_sample_step_px
         self._flow_step_px = config.flow_step_px
         self._flow_neighbor_distance_px = config.flow_neighbor_distance_px
-        
+    
+    def _log(self, msg: str) -> None:
+        """Helper for verbose logging"""
+        if self.config.verbose:
+            print(f"[Relational] {msg}")
+    
     def execute(self, input_data: LayerBundle) -> Dict[str, any]:
         """
         Build relational graphs from features.
@@ -70,31 +75,42 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         self._feature_index = self._build_feature_index(features)
         
         # 1. Visibility Graph (line-of-sight between features)
-        print("\n=== Building Visibility Graph ===")
+        self._log("Building Visibility Graph...")
         visibility_graph = self._build_visibility_graph(features, heightmap)
         
         # 2. Flow Network (water flow direction between features)
-        print("\n=== Building Flow Network ===")
+        self._log("Building Flow Network...")
         flow_network, flow_accumulation = self._build_flow_network(
             features, heightmap, aspect
         )
         
         # 3. Connectivity Graph (traversable paths)
-        print("\n=== Building Connectivity Graph ===")
+        self._log("Building Connectivity Graph...")
         connectivity_graph = self._build_connectivity_graph(
             features, heightmap, slope
         )
         
         # 4. Watersheds (drainage basins)
-        print("\n=== Delineating Watersheds ===")
-        watersheds = self._delineate_watersheds(
-            features, heightmap, aspect, curvature
-        )
+        self._log("Delineating Watersheds")
+        #watersheds = self._delineate_watersheds(features, heightmap, aspect, curvature)
+        # first, compute flow direction if we have aspect
+        if aspect is not None:
+            flow_dir = self._compute_flow_direction(heightmap)
+            
+            # Identify outlets (valley features or lowest points)
+            outlets = self._identify_watershed_outlets(features, heightmap, flow_dir)
+            
+            # Delineate watersheds using flow direction
+            watershed_labels = self._delineate_watersheds(heightmap, flow_dir, outlets)
+            
+            # Convert labeled watersheds to feature sets
+            watersheds = self._watershed_labels_to_features(watershed_labels, features)
+        else:
+            self._log(f"Warning: Aspect not available, watershed delineation skipped")
+            watersheds = {}
         
         # Log statistics
-        self._log_graph_statistics(
-            visibility_graph, flow_network, connectivity_graph, watersheds
-        )
+        self._log_graph_statistics(visibility_graph, flow_network, connectivity_graph, watersheds)
         
         return {
             "visibility_graph": visibility_graph,
@@ -157,105 +173,310 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         return visibility
     
     def _check_visibility(self, p1: PixelCoord, p2: PixelCoord, 
-                          heightmap: Heightmap) -> bool:
+                      heightmap: Heightmap) -> bool:
         """
         Check if two points are mutually visible using Bresenham line algorithm.
+        
+        Uses config.viewshed_sample_step_px to skip pixels for performance.
+        Larger step = faster but may miss small blockers.
+        
+        Args:
+            p1, p2: Pixel coordinates of the two points
+            heightmap: Heightmap with elevation data
+        
+        Returns:
+            True if line of sight is clear, False if terrain blocks view
         """
         x1, y1 = p1
         x2, y2 = p2
+        
+        rows, cols = heightmap.data.shape
+        
+        # Boundary check - ensure points are within map
+        if not (0 <= x1 < cols and 0 <= y1 < rows and 
+                0 <= x2 < cols and 0 <= y2 < rows):
+            return False
         
         # Get elevation at endpoints
         z1 = heightmap.data[y1, x1]
         z2 = heightmap.data[y2, x2]
         
-        # Calculate line parameters
+        # Calculate line length in pixels
         dx = abs(x2 - x1)
         dy = abs(y2 - y1)
+        distance = max(dx, dy)
+        
+        # If points are adjacent or same, always visible
+        if distance <= 1:
+            return True
+        
+        # Get step size from config (default to 1 if not set)
+        step = max(1, getattr(self.config, 'viewshed_sample_step_px', 1))
+        
+        # Adjust step to ensure at least 2 samples
+        step = min(step, distance // 2)
+        
+        # Pre-calculate line parameters
         sx = 1 if x1 < x2 else -1
         sy = 1 if y1 < y2 else -1
-        err = dx - dy
         
-        x, y = x1, y1
-        
-        while (x, y) != (x2, y2):
-            # Calculate interpolated elevation at this point along line
-            t = np.sqrt((x - x1)**2 + (y - y1)**2) / np.sqrt(dx**2 + dy**2)
+        # Use parameter t for interpolation (0 to 1)
+        for t in np.linspace(0, 1, max(2, distance // step + 1)):
+            # Skip endpoints (already checked)
+            if t == 0 or t == 1:
+                continue
+            
+            # Calculate point along line
+            x = int(x1 + t * (x2 - x1))
+            y = int(y1 + t * (y2 - y1))
+            
+            # Clamp to map bounds (safety)
+            x = max(0, min(cols - 1, x))
+            y = max(0, min(rows - 1, y))
+            
+            # Skip if we're at an endpoint due to rounding
+            if (x, y) == (x1, y1) or (x, y) == (x2, y2):
+                continue
+            
+            # Calculate interpolated elevation at this point
+            # Linear interpolation along line (simpler and faster)
             interpolated_z = z1 + t * (z2 - z1)
             
             # Get actual terrain elevation
             terrain_z = heightmap.data[y, x]
             
             # If terrain blocks view, return False
-            if terrain_z > interpolated_z:
+            # Add small epsilon (0.1m) to handle numerical precision
+            if terrain_z > interpolated_z + 0.1:
                 return False
-            
-            # Bresenham algorithm
-            e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                x += sx
-            if e2 < dx:
-                err += dx
-                y += sy
         
         return True
+    
+    def _identify_watershed_outlets(self, features: List[TerrainFeature], 
+                                 heightmap: Heightmap, 
+                                 flow_dir: np.ndarray) -> List[Tuple[int, int]]:
+        """
+        Identify watershed outlets from features and flow patterns.
+        
+        Outlets are typically:
+        - Valley features (lowest points in drainage)
+        - Local minima in flow accumulation
+        - Feature points with no outgoing flow
+        """
+        outlets = []
+        
+        # Method 1: Use valley features as outlets
+        valleys = [f for f in features if isinstance(f, ValleyFeature)]
+        for valley in valleys:
+            x, y = valley.centroid
+            outlets.append((int(x), int(y)))
+        
+        # Method 2: Find local minima in flow direction (cells with no outflow)
+        rows, cols = heightmap.shape
+        for y in range(1, rows - 1):
+            for x in range(1, cols - 1):
+                if flow_dir[y, x] == 0:  # No flow direction (pit or flat)
+                    # Check if it's a local minimum
+                    current_z = heightmap.data[y, x]
+                    is_min = True
+                    for dy in [-1, 0, 1]:
+                        for dx in [-1, 0, 1]:
+                            if dx == 0 and dy == 0:
+                                continue
+                            ny, nx = y + dy, x + dx
+                            if 0 <= ny < rows and 0 <= nx < cols:
+                                if heightmap.data[ny, nx] < current_z:
+                                    is_min = False
+                                    break
+                        if not is_min:
+                            break
+                    
+                    if is_min and len(outlets) < 100:  # Limit outlets
+                        outlets.append((x, y))
+        
+        # Remove duplicate outlets (same pixel)
+        outlets = list(set(outlets))
+        
+        self._log(f"Identified {len(outlets)} watershed outlets")
+        return outlets
+    
+    def _compute_flow_direction(self, heightmap: Heightmap) -> np.ndarray:
+        """
+        D8 flow direction algorithm.
+        
+        For each pixel, find the steepest downhill neighbor.
+        
+        Returns:
+            flow_dir: 2D array with values 0-8
+                0 = flat/no flow
+                1 = North      (N)
+                2 = Northeast  (NE)
+                3 = East       (E)
+                4 = Southeast  (SE)
+                5 = South      (S)
+                6 = Southwest  (SW)
+                7 = West       (W)
+                8 = Northwest  (NW)
+        """
+        z = heightmap.data
+        rows, cols = z.shape
+        flow_dir = np.zeros((rows, cols), dtype=np.uint8)
+        
+        # 8-direction offsets and their corresponding flow direction codes
+        # Order: N, NE, E, SE, S, SW, W, NW
+        directions = [
+            (-1, 0, 1),   # North
+            (-1, 1, 2),   # Northeast
+            (0, 1, 3),    # East
+            (1, 1, 4),    # Southeast
+            (1, 0, 5),    # South
+            (1, -1, 6),   # Southwest
+            (0, -1, 7),   # West
+            (-1, -1, 8)   # Northwest
+        ]
+        
+        # Skip border pixels (can't compute full neighborhood)
+        for y in range(1, rows - 1):
+            for x in range(1, cols - 1):
+                current_elev = z[y, x]
+                max_drop = 0
+                max_dir = 0
+                
+                # Check all 8 neighbors
+                for dy, dx, dir_code in directions:
+                    ny, nx = y + dy, x + dx
+                    neighbor_elev = z[ny, nx]
+                    drop = current_elev - neighbor_elev
+                    
+                    # Only consider downhill directions
+                    if drop > max_drop:
+                        max_drop = drop
+                        max_dir = dir_code
+                
+                # Assign flow direction if there's a downhill path
+                if max_drop > 0:
+                    flow_dir[y, x] = max_dir
+                else:
+                    flow_dir[y, x] = 0  # Flat or pit
+        
+        return flow_dir
+    
+    def _compute_flow_accumulation(self, flow_dir: np.ndarray) -> np.ndarray:
+        """
+        Compute flow accumulation from D8 flow direction.
+        
+        Accumulates the number of upstream cells that flow into each cell.
+        """
+        rows, cols = flow_dir.shape
+        accumulation = np.ones((rows, cols), dtype=np.float32)  # Each cell counts itself
+        
+        # Define reverse mapping: which neighbors flow into this cell
+        # For each direction code, which neighbor directions would point to this cell
+        reverse_map = {
+            1: 5,   # North: cells flowing South point here
+            2: 6,   # Northeast: cells flowing Southwest point here
+            3: 7,   # East: cells flowing West point here
+            4: 8,   # Southeast: cells flowing Northwest point here
+            5: 1,   # South: cells flowing North point here
+            6: 2,   # Southwest: cells flowing Northeast point here
+            7: 3,   # West: cells flowing East point here
+            8: 4    # Northwest: cells flowing Southeast point here
+        }
+        
+        # Direction offsets for finding upstream cells
+        dir_offsets = {
+            1: (-1, 0),   # North
+            2: (-1, 1),   # Northeast
+            3: (0, 1),    # East
+            4: (1, 1),    # Southeast
+            5: (1, 0),    # South
+            6: (1, -1),   # Southwest
+            7: (0, -1),   # West
+            8: (-1, -1)   # Northwest
+        }
+        
+        # Iterate until convergence (simple iterative approach)
+        # For production, use topological order (flow direction is DAG)
+        changed = True
+        max_iter = rows * cols
+        iter_count = 0
+        
+        while changed and iter_count < max_iter:
+            changed = False
+            for y in range(rows):
+                for x in range(cols):
+                    dir_code = flow_dir[y, x]
+                    if dir_code > 0:
+                        # Get downstream cell
+                        dy, dx = dir_offsets[dir_code]
+                        ny, nx = y + dy, x + dx
+                        if 0 <= ny < rows and 0 <= nx < cols:
+                            # Add current accumulation to downstream
+                            new_val = accumulation[y, x] + 1
+                            if new_val > accumulation[ny, nx]:
+                                accumulation[ny, nx] = new_val
+                                changed = True
+        
+        return accumulation
     
     def _build_flow_network(self, features: List[TerrainFeature],
                             heightmap: Heightmap,
                             aspect: Optional[np.ndarray]) -> Tuple[Dict[str, List[str]], ScalarField]:
         """
         Build flow network based on aspect (flow direction).
-        
-        Returns:
-            flow_network: feature_id → list of downstream feature_ids (ordered)
-            flow_accumulation: per-pixel accumulated upstream area
         """
         flow_network = {f.feature_id: [] for f in features}
         
-        # If no aspect, return empty network
         if aspect is None:
-            print("Aspect not available, flow network will be empty")
+            self._log(f"Aspect not available, flow network will be empty")
             return flow_network, None
+        
+        # NEW: Use proper D8 flow direction instead of simplified model
+        flow_dir = self._compute_flow_direction(heightmap)
         
         # Build feature KD-tree for nearest neighbor search
         feature_coords = [(f.centroid[0], f.centroid[1]) for f in features]
         feature_ids = [f.feature_id for f in features]
         kdtree = KDTree(feature_coords)
         
-        # For each pixel, determine flow direction and accumulate
+        # Initialize flow accumulation
         flow_accumulation = np.zeros(heightmap.shape, dtype=np.float32)
         
-        # Simplified: accumulate based on aspect direction
-        # (Full flow accumulation would require D8 or D-infinity algorithm)
-        rows, cols = heightmap.shape[1], heightmap.shape[0]  # Note: shape is (height, width)
-
-        # Convert aspect to flow direction vectors
-        # aspect: 0 = North, π/2 = East, π = South, 3π/2 = West
-        # TODO: Replace with proper D8 flow accumulation for production
-        # Current implementation is a simplified centroid-to-centroid approximation
-        # Suitable for tactical feature graphs, not hydrological modeling
-        print("_build_flow_network() NOT IMPLEMENTED YET, USING SIMPLIFIED MODEL")
-        dx = -np.sin(aspect)  # East-West component
-        dy = -np.cos(aspect)  # North-South component
+        # TODO: Implement proper flow accumulation from flow_dir
+        # For now, use simplified model with flow_dir
         
-        # Find downstream connections between features
+        rows, cols = heightmap.shape
         for f in features:
             x, y = f.centroid
-            
-            # Check aspect at centroid to find flow direction
             if 0 <= x < cols and 0 <= y < rows:
-                a = aspect[y, x]
-                # Flow direction vector
-                flow_x = x - np.sin(a) * self._flow_step_px
-                flow_y = y - np.cos(a) * self._flow_step_px
-                
-                # Find nearest feature in flow direction
-                distances, indices = kdtree.query([(flow_x, flow_y)])
-                
-                if distances[0] < self._flow_neighbor_distance_px:
-                    downstream_id = feature_ids[indices[0]]
-                    if downstream_id != f.feature_id:
-                        flow_network[f.feature_id].append(downstream_id)
+                # Get flow direction at this point
+                direction = flow_dir[y, x]
+                if direction > 0:  # Has flow
+                    # Direction encoding: 1-8 (N, NE, E, SE, S, SW, W, NW)
+                    # Convert to step vector
+                    dir_map = {
+                        1: (0, -1),   # North
+                        2: (1, -1),   # Northeast
+                        3: (1, 0),    # East
+                        4: (1, 1),    # Southeast
+                        5: (0, 1),    # South
+                        6: (-1, 1),   # Southwest
+                        7: (-1, 0),   # West
+                        8: (-1, -1)   # Northwest
+                    }
+                    dx, dy = dir_map.get(direction, (0, 0))
+                    
+                    # Flow destination
+                    flow_x = x + dx * self._flow_step_px
+                    flow_y = y + dy * self._flow_step_px
+                    
+                    # Find nearest feature in flow direction
+                    distances, indices = kdtree.query([(flow_x, flow_y)])
+                    
+                    if distances[0] < self._flow_neighbor_distance_px:
+                        downstream_id = feature_ids[indices[0]]
+                        if downstream_id != f.feature_id:
+                            flow_network[f.feature_id].append(downstream_id)
         
         return flow_network, flow_accumulation
     
@@ -272,7 +493,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         
         # If no slope, use simple distance-based connectivity
         if slope is None:
-            print("Slope not available, using distance-based connectivity")
+            self._log(f"Slope not available, using distance-based connectivity")
             return self._distance_based_connectivity(features)
         
         # Build feature KD-tree
@@ -321,27 +542,72 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         return connectivity
     
     def _is_path_traversable(self, f1: TerrainFeature, f2: TerrainFeature,
-                              heightmap: Heightmap, slope: np.ndarray) -> bool:
+                         heightmap: Heightmap, slope: np.ndarray) -> bool:
         """
-        Check traversability using config vehicle climb angle.
+        Check if the path between two features is traversable.
         
-        The path is traversable if all points along the line have slope
-        within vehicle limits (from PipelineConfig).
+        Returns True if the entire path has slope <= vehicle_climb_angle.
+        Paths with slopes > cliff_threshold are considered BLOCKED (False).
+        
+        Args:
+            f1, f2: Features to check connectivity between
+            heightmap: Heightmap for scale conversion
+            slope: Slope field in degrees
+        
+        Returns:
+            True if traversable, False if blocked or exceeds vehicle limits
         """
         x1, y1 = f1.centroid
         x2, y2 = f2.centroid
         
-        # If distance > max range, skip
+        # Get config thresholds
+        max_slope = self.config.vehicle_climb_angle      # [20-45] degrees
+        cliff_threshold = self.config.cliff_threshold_degrees  # [30-60] degrees
+        
+        # If distance > max range, not traversable
         dist_px = np.hypot(x2 - x1, y2 - y1)
         max_range_px = self._connection_radius_m / heightmap.config.horizontal_scale
         if dist_px > max_range_px:
             return False
         
-        # Get max slope from config (game-specific)
-        max_slope = self.config.vehicle_climb_angle
+        # Check slope along path using Bresenham
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        err = dx - dy
         
-        # Check slope along path
-        return self._check_path_slope(x1, y1, x2, y2, slope, max_slope)
+        x, y = x1, y1
+        
+        while (x, y) != (x2, y2):
+            # Skip the start point (already at feature)
+            if (x, y) != (x1, y1):
+                # Check bounds
+                if 0 <= y < slope.shape[0] and 0 <= x < slope.shape[1]:
+                    current_slope = slope[y, x]
+                    
+                    # Cliff: absolutely blocked
+                    if current_slope > cliff_threshold:
+                        return False
+                    # Steep but within vehicle limits: still traversable (True)
+                    if current_slope > max_slope:
+                        return False
+            
+            # Bresenham algorithm
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+        
+        # Check the end point as well
+        if 0 <= y2 < slope.shape[0] and 0 <= x2 < slope.shape[1]:
+            if slope[y2, x2] > max_slope or slope[y2, x2] > cliff_threshold:
+                return False
+        
+        return True
 
     def _check_path_slope(self, x1: int, y1: int, x2: int, y2: int,
                           slope: np.ndarray, max_slope: float) -> bool:
@@ -367,79 +633,125 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
                 y += sy
         return True
     
-    def _delineate_watersheds(self, features: List[TerrainFeature],
-                                heightmap: Heightmap,
-                                aspect: Optional[np.ndarray],
-                                curvature: Optional[np.ndarray]) -> Dict[str, Set[str]]:
+    def _delineate_watersheds(self, heightmap: Heightmap, 
+                          flow_dir: np.ndarray, 
+                          outlets: List[Tuple[int, int]]) -> np.ndarray:
         """
-        Delineate watersheds based on aspect and curvature.
+        Label watersheds using flow direction.
         
-        Each watershed is a drainage basin that flows to a common outlet.
+        Walk upstream from outlet points using reverse flow direction.
+        
+        Returns:
+            watershed_labels: 2D array with integer labels for each watershed
+        """
+        rows, cols = heightmap.shape
+        watershed_labels = np.zeros((rows, cols), dtype=np.int32)
+        
+        # Direction offsets for finding upstream cells
+        # For each flow direction code, which neighbor directions would point here?
+        reverse_dir_map = {
+            1: 5,   # North: cells flowing South point here
+            2: 6,   # Northeast: cells flowing Southwest point here
+            3: 7,   # East: cells flowing West point here
+            4: 8,   # Southeast: cells flowing Northwest point here
+            5: 1,   # South: cells flowing North point here
+            6: 2,   # Southwest: cells flowing Northeast point here
+            7: 3,   # West: cells flowing East point here
+            8: 4    # Northwest: cells flowing Southeast point here
+        }
+        
+        # Direction offsets for neighbors
+        neighbor_offsets = {
+            1: (-1, 0),   # North
+            2: (-1, 1),   # Northeast
+            3: (0, 1),    # East
+            4: (1, 1),    # Southeast
+            5: (1, 0),    # South
+            6: (1, -1),   # Southwest
+            7: (0, -1),   # West
+            8: (-1, -1)   # Northwest
+        }
+        
+        # Process each outlet
+        for outlet_id, (ox, oy) in enumerate(outlets, start=1):
+            # BFS/DFS upstream from outlet
+            stack = [(ox, oy)]
+            watershed_labels[oy, ox] = outlet_id
+            
+            while stack:
+                cx, cy = stack.pop()
+                current_dir = flow_dir[cy, cx]
+                
+                # Find cells that flow into this cell
+                # For each possible flow direction that could point to (cx, cy)
+                for neighbor_dir, (dy, dx) in neighbor_offsets.items():
+                    nx, ny = cx + dx, cy + dy  # Note: x,y order careful!
+                    
+                    if 0 <= nx < cols and 0 <= ny < rows:
+                        # Check if neighbor flows to current cell
+                        neighbor_flow = flow_dir[ny, nx]
+                        if neighbor_flow > 0:
+                            # Check if neighbor's flow direction points to current cell
+                            if neighbor_flow == reverse_dir_map.get(current_dir, 0) or \
+                               (current_dir == 0 and neighbor_flow > 0):
+                                if watershed_labels[ny, nx] == 0:
+                                    watershed_labels[ny, nx] = outlet_id
+                                    stack.append((nx, ny))
+        
+        return watershed_labels
+
+
+    def _watershed_labels_to_features(self, watershed_labels: np.ndarray,
+                                       features: List[TerrainFeature]) -> Dict[str, Set[str]]:
+        """
+        Convert watershed labels to feature ID sets.
+        
+        Returns:
+            Dict[basin_id, Set[feature_ids]] where basin_id is the outlet feature ID
         """
         watersheds = {}
         
-        if aspect is None:
-            print("Aspect not available, watershed delineation skipped")
-            return watersheds
+        # Create a lookup for features by their centroid pixel
+        feature_pixels = {}
+        for f in features:
+            x, y = f.centroid
+            if 0 <= y < watershed_labels.shape[0] and 0 <= x < watershed_labels.shape[1]:
+                feature_pixels[(int(x), int(y))] = f.feature_id
         
-        # Find valley features (these are potential watershed outlets)
-        valleys = [f for f in features if isinstance(f, ValleyFeature)]
-        
-        if not valleys:
-            return watersheds
-        
-        # For each valley, create a watershed
-        for valley in valleys:
-            basin_id = valley.feature_id
-            basin_members = set()
-            
-            # Simplified: find features that flow toward this valley
-            # In a full implementation, this would use flow accumulation
-            # and watershed labeling algorithms
-            
-            # Add features within a certain distance
-            x, y = valley.centroid
-            radius = 100  # pixels
-            
-            # TODO: Implement proper watershed labeling using flow accumulation
-            # Current distance-based approach is a placeholder for tactical use
-            # For hydrological accuracy, use scipy.ndimage.label on flow-direction field
-            print("_delineate_watersheds() NOT IMPLEMENTED YET, USING SIMPLIFIED MODEL")
-            for f in features:
-                fx, fy = f.centroid
-                if np.sqrt((fx - x)**2 + (fy - y)**2) < radius:
-                    basin_members.add(f.feature_id)
-            
-            if basin_members:
-                watersheds[basin_id] = basin_members
+        # Group features by watershed label
+        for (x, y), feature_id in feature_pixels.items():
+            basin_id = watershed_labels[y, x]
+            if basin_id > 0:
+                basin_key = f"basin_{basin_id}"
+                if basin_key not in watersheds:
+                    watersheds[basin_key] = set()
+                watersheds[basin_key].add(feature_id)
         
         return watersheds
-    
+        
     def _log_graph_statistics(self, visibility: Dict, flow: Dict, 
                                connectivity: Dict, watersheds: Dict) -> None:
         """Log graph statistics for debugging."""
-        print("\n=== Graph Statistics ===")
-        
         # Visibility graph
         vis_edges = sum(len(v) for v in visibility.values())
         vis_nodes = len([v for v in visibility.values() if v])
-        print(f"Visibility: {vis_nodes} connected nodes, {vis_edges // 2} edges")
+        self._log(f"Visibility: {vis_nodes} connected nodes, {vis_edges // 2} edges")
         
         # Flow network
         flow_edges = sum(len(v) for v in flow.values())
         flow_nodes = len([v for v in flow.values() if v])
-        print(f"Flow Network: {flow_nodes} nodes with downstream, {flow_edges} edges")
+        self._log(f"Flow Network: {flow_nodes} nodes with downstream, {flow_edges} edges")
         
         # Connectivity graph
         conn_edges = sum(len(v) for v in connectivity.values())
         conn_nodes = len([v for v in connectivity.values() if v])
-        print(f"Connectivity: {conn_nodes} connected nodes, {conn_edges // 2} edges")
+        self._log(f"Connectivity: {conn_nodes} connected nodes, {conn_edges // 2} edges")
         
         # Watersheds
-        print(f"Watersheds: {len(watersheds)} basins")
+        self._log(f"Watersheds: {len(watersheds)} basins")
         if watersheds:
             avg_basin_size = np.mean([len(b) for b in watersheds.values()])
-            print(f"  Average basin size: {avg_basin_size:.1f} features")
+            self._log(f"Average basin size: {avg_basin_size:.1f} features")
     
     @property
     def output_schema(self) -> dict:

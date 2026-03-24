@@ -156,18 +156,18 @@ class PipelineConfig:
     
     # --- Peaks (local maxima with convex surroundings) ---
     min_peak_size_px: int = 1                   # [1-10] pixels, minimum peak footprint
-    peak_min_prominence_m: float = 2.0          # [1-50] meters, minimum height above saddle
+    peak_min_prominence_m: float = 5.0          # [1-50] meters, minimum height above saddle
     peak_nms_radius_px: int = 15                # [5-30] pixels, non-maximum suppression radius
     peak_shoulder_convex_ratio: float = 0.05    # [0.01-0.3] convex pixels in annular ring
     peak_annular_inner_m: float = 5.0           # [2-15] meters, inner shoulder radius
     peak_annular_outer_m: float = 12.0          # [5-25] meters, outer shoulder radius
     
     # --- Ridges & Valleys (linear features) ---
-    min_ridge_length_px: int = 3                # [3-20] pixels, minimum ridge length
-    min_valley_length_px: int = 6               # [3-20] pixels, minimum valley length
+    min_ridge_length_px: int = 10                # [3-20] pixels, minimum ridge length
+    min_valley_length_px: int = 10               # [3-20] pixels, minimum valley length
     
     # --- Flat Zones (traversable areas) ---
-    min_flat_zone_size_px: int = 250            # [50-500] pixels, minimum flat area
+    min_flat_zone_size_px: int = 450            # [50-500] pixels, minimum flat area
     flat_zone_slope_threshold_deg: float = 3.0  # [1-10] degrees, max slope for "flat"
     
     # --- Saddles (passes between peaks) ---
@@ -182,11 +182,23 @@ class PipelineConfig:
     # LAYER 4: RELATIONAL - Connectivity & Flow
     # =========================================================================
     
-    visibility_max_range_m: float = 1200.0      # [200-3000] meters, line-of-sight limit
-    connection_radius_m: float = 200.0          # [50-500] meters, feature connection radius
-    viewshed_sample_step_px: int = 5            # [2-10] pixels, ray casting step size
-    flow_step_px: int = 10                      # [5-20] pixels, flow accumulation step
-    flow_neighbor_distance_px: int = 50         # [20-100] pixels, flow connectivity radius
+    # --- Visibility ---
+    visibility_max_range_m: float = 1000.0      # [200-3000] meters, max line-of-sight distance
+    viewshed_sample_step_px: int = 10            # [2-10] pixels, step size for ray casting (performance)
+    visibility_sample_radius: int = 5           # [3-15] pixels, sampling radius for viewshed
+    
+    # --- Flow Network ---
+    flow_step_px: int = 10                      # [5-20] pixels, step size for flow accumulation
+    flow_neighbor_distance_px: int = 50         # [20-100] pixels, max distance to downstream feature
+    
+    # --- Connectivity ---
+    connection_radius_m: float = 50.0          # [50-500] meters, feature connection radius
+    vehicle_climb_angle: float = 30.0           # [20-45] degrees, max slope for vehicles
+    cliff_threshold_degrees: float = 45.0       # [30-60] degrees, impassable terrain
+    
+    # --- Watersheds ---
+    watershed_min_area_m2: float = 1000.0       # [500-10000] m², minimum watershed area
+    watershed_sample_step_px: int = 20          # [5-20] pixels, step size for watershed delineation
     
     # =========================================================================
     # LAYER 5: SEMANTICS - Domain Interpretation
