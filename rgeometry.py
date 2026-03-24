@@ -142,7 +142,7 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
             self._debug(f"Using fixed epsilon: {eps:.6f}")
             return eps, eps
 
-    def _compute_adaptive_epsilon(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
+    def _compute_adaptive_epsilon_old(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
         """Compute adaptive thresholds using 75th percentile to avoid seam artifact inflation."""
         H_valid = H[~np.isnan(H)]
         K_valid = K[~np.isnan(K)]
@@ -161,7 +161,40 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         self._debug(f"Adaptive epsilon | H_anchor={h_anchor:.6f} → H_eps={h_epsilon:.6f}, K_anchor={k_anchor:.6f} → K_eps={k_epsilon:.6f}")
         return h_epsilon, k_epsilon
         
-    def _classify_curvature(self, H: ScalarField, K: ScalarField, h_epsilon: float, k_epsilon: float) -> np.ndarray:
+    def _compute_adaptive_epsilon(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
+        """Compute adaptive thresholds using 75th percentile of NON-FLAT regions only."""
+        
+        # First, identify potentially non-flat regions using slope or elevation variance
+        # Simple approach: use a low-pass filtered version to find regions with variation
+        from scipy import ndimage
+        
+        H_valid = H[~np.isnan(H)]
+        K_valid = K[~np.isnan(K)]
+        
+        # Find regions with significant variation (ignore absolute flat)
+        H_abs = np.abs(H)
+        H_threshold = np.percentile(H_abs, 50)  # 50th percentile as baseline
+        non_flat_mask = H_abs > H_threshold
+        
+        if np.sum(non_flat_mask) < 100:
+            # Too few non-flat pixels, use global but with fallback
+            h_anchor = np.percentile(np.abs(H_valid), 75)
+            k_anchor = np.percentile(np.abs(K_valid), 75)
+        else:
+            # Use only non-flat regions for percentile calculation
+            h_anchor = np.percentile(H_abs[non_flat_mask], 75)
+            k_anchor = np.percentile(np.abs(K)[non_flat_mask], 75)
+        
+        h_epsilon = max(self.config.curvature_epsilon_h_factor * h_anchor,
+                        self.config.curvature_epsilon_h_min)
+        k_epsilon = max(self.config.curvature_epsilon_k_factor * k_anchor,
+                        self.config.curvature_epsilon_k_min)
+        
+        self._debug(f"Adaptive epsilon (non-flat regions) | H_anchor={h_anchor:.6f} → H_eps={h_epsilon:.6f}, "
+                    f"K_anchor={k_anchor:.6f} → K_eps={k_epsilon:.6f}")
+        return h_epsilon, k_epsilon
+        
+    def _classify_curvature_old(self, H: ScalarField, K: ScalarField, h_epsilon: float, k_epsilon: float) -> np.ndarray:
         """Classify using independent H and K thresholds."""
         H = np.asarray(H)
         K = np.asarray(K)
@@ -177,6 +210,36 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         result[convex_mask] = "CONVEX"
         
         # Concave: H < -h_epsilon AND K > k_epsilon
+        concave_mask = (H < -h_epsilon) & (K > k_epsilon) & ~saddle_mask
+        result[concave_mask] = "CONCAVE"
+        
+        return result
+    
+    # Change: 
+    # * K > -k_epsilon instead of K > k_epsilon.
+    #   This includes cylindrical surfaces (K≈0) in convex/concave classification.
+    # * Cylindrical variants
+    
+    def _classify_curvature(self, H, K, h_epsilon, k_epsilon):
+        result = np.full(H.shape, "FLAT", dtype='<U20')
+        
+        # Saddle
+        saddle_mask = K < -k_epsilon
+        result[saddle_mask] = "SADDLE"
+        
+        # Cylindrical convex (ridge-like)
+        cyl_convex_mask = (H > h_epsilon) & (np.abs(K) < k_epsilon) & ~saddle_mask
+        result[cyl_convex_mask] = "CYLINDRICAL_CONVEX"
+        
+        # Cylindrical concave (valley-like)
+        cyl_concave_mask = (H < -h_epsilon) & (np.abs(K) < k_epsilon) & ~saddle_mask
+        result[cyl_concave_mask] = "CYLINDRICAL_CONCAVE"
+        
+        # True convex (dome)
+        convex_mask = (H > h_epsilon) & (K > k_epsilon) & ~saddle_mask
+        result[convex_mask] = "CONVEX"
+        
+        # True concave (bowl)
         concave_mask = (H < -h_epsilon) & (K > k_epsilon) & ~saddle_mask
         result[concave_mask] = "CONCAVE"
         

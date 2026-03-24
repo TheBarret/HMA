@@ -23,16 +23,19 @@ GridCoord: TypeAlias = tuple[float, float, float]       # (x, y, elevation) in m
 ScalarField: TypeAlias = np.ndarray                     # 2D array of float32
 VectorField: TypeAlias = tuple[np.ndarray, np.ndarray]  # (dx, dy) components
 
-# Typed bundle passed between layers — explicit over opaque dicts
-LayerBundle: TypeAlias = Dict[str, Any]  # Keys defined per-layer in output_schema
+# Typed bundle passed between layers, explicit over opaque dicts
+# Keys defined per-layer in output_schema
+LayerBundle: TypeAlias = Dict[str, Any]  
 
 # Feature classification
 
 class CurvatureType(Enum):
-    CONVEX = auto()
-    CONCAVE = auto()
-    FLAT = auto()
-    SADDLE = auto()
+    CONVEX = auto()                 # H > 0, K > 0 (dome/peak)
+    CONCAVE = auto()                # H < 0, K > 0 (bowl/depression)
+    CYLINDRICAL_CONVEX = auto()     # H > 0, K ≈ 0 (ridge)
+    CYLINDRICAL_CONCAVE = auto()    # H < 0, K ≈ 0 (valley)
+    SADDLE = auto()                 # K < 0
+    FLAT = auto()                   # H ≈ 0, K ≈ 0
     
     def __repr__(self):
         return self.name
@@ -52,12 +55,8 @@ class Traversability(Enum):
         return self.name
 
 
-# #########################################
-#  * * MASTER PIPELINE CONFIG
-# all modules are reading from this config
-# #########################################
 
-
+# Template Profiles
 class GameType(Enum):
     """Supported game types for automatic scaling"""
     ARMA_2 = "ARMA_2"                   # Typical: 1-5m resolution
@@ -116,87 +115,128 @@ class GameScaling:
         }
         return presets.get(game, presets[GameType.ARMA_3])
 
+# =========================================================================
+#  MASTER PIPELINE CONFIG
+# =========================================================================
+
 @dataclass
 class PipelineConfig:
     """Global configuration for the analysis pipeline."""
     
-    # Layer 0: Calibration 
-    horizontal_scale: float = 2.0
-    vertical_scale: float = 0.2
-    sea_level_offset: float = 10.0
-    noise_reduction_sigma: float = 1.2
+    # =========================================================================
+    # LAYER 0: CALIBRATION - Input Processing
+    # =========================================================================
     
-    # Layer 1: Gradient 
-    gradient_method: str = "central_difference"  # or "sobel"
-    flat_threshold_deg: float = 0.5 # handle residual where aspect is undefined
+    horizontal_scale: float = 2.0           # [0.5-10.0] meters per pixel
+    vertical_scale: float = 0.2             # [0.05-1.0] meters per grayscale unit
+    sea_level_offset: float = 10.0          # [0-100] meters, base elevation
+    noise_reduction_sigma: float = 2.0      # [0.5-5.0] Gaussian blur strength
     
-    # Layer 2: Curvature
-    curvature_epsilon: float = 0.00001            # static fallback
+    # =========================================================================
+    # LAYER 1: LOCAL GEOMETRY - Slope & Aspect
+    # =========================================================================
     
-    adaptive_epsilon = True
-    curvature_epsilon_h_factor = 0.6 
-    curvature_epsilon_k_factor = 0.6
-    curvature_epsilon_h_min = 1e-5   
-    curvature_epsilon_k_min = 1e-6   
+    gradient_method: str = "central_difference"  # ["central_difference", "sobel"]
+    flat_threshold_deg: float = 0.5              # [0-2] degrees, aspect undefined below this
     
-    # Layer 3: Topology 
-    peak_annular_inner_m: float = 5.0
-    peak_annular_outer_m: float = 12.0
+    # =========================================================================
+    # LAYER 2: REGIONAL GEOMETRY - Curvature
+    # =========================================================================
     
-    min_peak_size_px: int = 1            # keep 1 — local_maxima returns 1px plateaus
-    peak_min_prominence_m: float = 2.0   # real quality gate for peaks (meters)
-    peak_nms_radius_px: int = 20         # suppress duplicate peaks within this radius
+    adaptive_epsilon: bool = True               # [True/False] auto-tune thresholds
+    curvature_epsilon: float = 0.00001          # [1e-6-1e-3] static fallback (1/m)
+    curvature_epsilon_h_factor: float = 0.6     # [0.3-0.9] multiplier for mean curvature
+    curvature_epsilon_k_factor: float = 0.6     # [0.3-0.9] multiplier for Gaussian curvature
+    curvature_epsilon_h_min: float = 0.0001     # [1e-6-1e-2] minimum mean curvature (1/m)
+    curvature_epsilon_k_min: float = 0.00001    # [1e-7-1e-3] minimum Gaussian curvature (1/m²)
     
-    min_ridge_length_px: int = 6
+    # =========================================================================
+    # LAYER 3: TOPOLOGY - Feature Detection
+    # =========================================================================
     
-    min_valley_length_px: int = 6
+    # --- Peaks (local maxima with convex surroundings) ---
+    min_peak_size_px: int = 1                   # [1-10] pixels, minimum peak footprint
+    peak_min_prominence_m: float = 2.0          # [1-50] meters, minimum height above saddle
+    peak_nms_radius_px: int = 15                # [5-30] pixels, non-maximum suppression radius
+    peak_shoulder_convex_ratio: float = 0.05    # [0.01-0.3] convex pixels in annular ring
+    peak_annular_inner_m: float = 5.0           # [2-15] meters, inner shoulder radius
+    peak_annular_outer_m: float = 12.0          # [5-25] meters, outer shoulder radius
     
-    min_flat_zone_size_px: int = 250
+    # --- Ridges & Valleys (linear features) ---
+    min_ridge_length_px: int = 3                # [3-20] pixels, minimum ridge length
+    min_valley_length_px: int = 6               # [3-20] pixels, minimum valley length
     
-    flat_zone_slope_threshold_deg: float = 5.0
+    # --- Flat Zones (traversable areas) ---
+    min_flat_zone_size_px: int = 250            # [50-500] pixels, minimum flat area
+    flat_zone_slope_threshold_deg: float = 3.0  # [1-10] degrees, max slope for "flat"
     
-    saddle_k_min_threshold: float = 5e-5
-    saddle_confidence_threshold: float = 400    # 10 - 1000
-        
-    border_margin_px: int = 10
-    prominence_search_radius_m: float = 100.0
-    peak_shoulder_convex_ratio: float = 0.05  # Minimum convex pixels in shoulder
+    # --- Saddles (passes between peaks) ---
+    saddle_k_min_threshold: float = 0.00020     # [1e-6-1e-2] minimum |K| for saddle (1/m²)
+    saddle_confidence_threshold: float = 1.0    # [0.0-1.0] normalized confidence (1.0 = all)
     
-    # Layer 4: Relational 
-    visibility_max_range_m: float = 1200.0
-    connection_radius_m: float = 200.0
-    viewshed_sample_step_px: int = 5
-    flow_step_px: int = 10
-    flow_neighbor_distance_px: int = 50
+    # --- General Topology ---
+    border_margin_px: int = 10                  # [5-30] pixels, ignore edges
+    prominence_search_radius_m: float = 100.0   # [50-500] meters, search radius for prominence
     
-    # Layer 5: Tactical 
-    game_type: GameType = GameType.ARMA_3
-    defensive_min_prominence_m: float = 8.0
-    defensive_min_elevation_m: float = 5.0
-    defensive_max_slope_deg: float = 25.0
-    defensive_min_visibility: int = 5
-    observation_min_prominence_m: float = 10.0
-    observation_min_visibility: int = 10
-    assembly_min_area_m2: float = 2000.0
-    assembly_max_slope_deg: float = 5.0
-    chokepoint_min_connectivity: int = 2
-    cover_min_width_m: float = 5.0
+    # =========================================================================
+    # LAYER 4: RELATIONAL - Connectivity & Flow
+    # =========================================================================
     
-    # additional fields
-    cliff_threshold_degrees: float = 45.0
-    gentle_slope_threshold_degrees: float = 15.0
-    vehicle_climb_angle: float = 30.0
-    visibility_sample_radius: int = 8
+    visibility_max_range_m: float = 1200.0      # [200-3000] meters, line-of-sight limit
+    connection_radius_m: float = 200.0          # [50-500] meters, feature connection radius
+    viewshed_sample_step_px: int = 5            # [2-10] pixels, ray casting step size
+    flow_step_px: int = 10                      # [5-20] pixels, flow accumulation step
+    flow_neighbor_distance_px: int = 50         # [20-100] pixels, flow connectivity radius
+    
+    # =========================================================================
+    # LAYER 5: SEMANTICS - Domain Interpretation
+    # =========================================================================
+    
+    game_type: GameType = GameType.ARMA_3       # [ARMA_2/ARMA_3/WAR_THUNDER/WORLD_OF_TANKS/CUSTOM]
+    
+    # --- Defensive Positions ---
+    defensive_min_prominence_m: float = 8.0     # [5-30] meters, minimum height advantage
+    defensive_min_elevation_m: float = 5.0      # [2-20] meters, minimum absolute height
+    defensive_max_slope_deg: float = 25.0       # [15-35] degrees, max slope for defense
+    defensive_min_visibility: int = 5           # [3-15] number of visible features
+    
+    # --- Observation Points ---
+    observation_min_prominence_m: float = 10.0  # [5-50] meters, minimum prominence
+    observation_min_visibility: int = 10        # [5-30] number of visible features
+    
+    # --- Assembly Areas ---
+    assembly_min_area_m2: float = 2000.0        # [500-10000] square meters, staging area
+    assembly_max_slope_deg: float = 5.0         # [2-10] degrees, max slope for assembly
+    
+    # --- Chokepoints ---
+    chokepoint_min_connectivity: int = 2        # [2-5] minimum connections to be chokepoint
+    cover_min_width_m: float = 5.0              # [2-15] meters, minimum cover width
+    
+    # =========================================================================
+    # ADDITIONAL FIELDS - Movement & Terrain Classification
+    # =========================================================================
+    
+    cliff_threshold_degrees: float = 45.0       # [30-60] degrees, impassable slope
+    gentle_slope_threshold_degrees: float = 15.0  # [10-25] degrees, easy traversal
+    vehicle_climb_angle: float = 30.0           # [20-45] degrees, vehicle limit
+    visibility_sample_radius: int = 8           # [3-15] pixels, viewshed sampling radius
+    
     analysis_scales: Dict[str, int] = field(default_factory=lambda: {
-        "micro": 3, "meso": 15, "macro": 50
+        "micro": 3,     # [1-5] pixels, noise/small rocks
+        "meso": 15,     # [10-30] pixels, gullies/ridges
+        "macro": 50     # [30-100] pixels, mountains/valleys
     })
     
-    # Runtime
-    verbose: bool = True
-    save_intermediates: bool = False
+    # =========================================================================
+    # RUNTIME
+    # =========================================================================
     
+    verbose: bool = True                        # [True/False] enable debug logging
+    save_intermediates: bool = False            # [True/False] save intermediate files
+    
+    # =========================================================================
     # Extensions
-    
+    # =========================================================================
     def is_traversable(self, slope_degrees: float) -> Traversability:
         """Classify slope by vehicle constraints."""
         if slope_degrees > self.cliff_threshold_degrees:
@@ -323,88 +363,6 @@ class PipelineLayer(ABC, Generic[T]):
         """Describes the structure of returned data for validation."""
         pass
         
-
-#
-#  Layer - Contracts Only
-#
-
-
-class Layer0_Calibration(PipelineLayer[Heightmap]):
-    """Normalize raw image → calibrated mathematical surface."""
-    
-    def execute(self, input_data: dict) -> Heightmap:
-        # input_data: {"raw_array": np.ndarray, "config": NormalizationConfig}
-        # Output: Heightmap with noise-reduced, normalized data
-        pass
-    
-    @property
-    def output_schema(self) -> dict:
-        return {"type": "Heightmap", "fields": ["data", "config", "origin"]}
-
-class Layer1_LocalGeometry(PipelineLayer[Dict[str, ScalarField]]):
-    """Compute first derivatives: slope magnitude and aspect direction."""
-    
-    def execute(self, input_data: Heightmap) -> Dict[str, ScalarField]:
-        # Output: {"slope": 2D array of degrees, "aspect": 2D array of radians}
-        pass
-    
-    @property
-    def output_schema(self) -> dict:
-        return {
-            "slope": {"type": "ScalarField", "range": [0, 90], "unit": "degrees"},
-            "aspect": {"type": "ScalarField", "range": [0, 6.28318], "unit": "radians"}  # 0–2π full compass
-        }
-
-class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
-    """
-    Compute second derivatives: curvature classification.
-    
-    Takes the calibrated Heightmap directly — curvature is ∂²z/∂x² and ∂²z/∂y²,
-    computed from the clean elevation surface, NOT derived from the slope/aspect maps.
-    Deriving from Layer 1 output would compound numerical error across two finite-difference steps.
-    """
-    
-    def execute(self, input_data: Heightmap) -> Dict[str, ScalarField]:
-        # Input: calibrated Heightmap from Layer 0 (same source as Layer 1)
-        # Output: {"curvature": 2D array, "curvature_type": 2D array of CurvatureType}
-        pass
-    
-    @property
-    def output_schema(self) -> dict:
-        return {
-            "curvature": {"type": "ScalarField", "unit": "1/meters"},
-            "gaussian_curvature": {"type": "ScalarField", "unit": "1/meters²"},  # ADD THIS
-            "curvature_type": {"type": "CategoricalField", "values": ["CONVEX", "CONCAVE", "FLAT", "SADDLE"]}
-        }
-
-
-class Layer3_TopologicalFeatures(PipelineLayer[List["TerrainFeature"]]):
-    """
-    Resolve continuous fields into discrete terrain structures.
-    
-    Requires the full bundle from all prior layers:
-      - heightmap:      raw elevation for prominence calculation
-      - slope:          needed to distinguish ridge (convex + steep) from plateau (convex + flat)
-      - aspect:         needed for saddle orientation and flow-seed direction
-      - curvature:      primary signal for ridge/valley/saddle classification
-      - curvature_type: pre-classified categorical field for threshold-free feature seeding
-
-    Output changes type: this is the first layer that produces *discrete objects*
-    (points and polylines) rather than continuous scalar fields.
-    """
-    
-    def execute(self, input_data: LayerBundle) -> List["TerrainFeature"]:
-        # input_data keys: "heightmap", "slope", "aspect", "curvature", "curvature_type"
-        # Output: flat list of TerrainFeature subclasses (PeakFeature, RidgeFeature, etc.)
-        pass
-    
-    @property
-    def output_schema(self) -> dict:
-        return {
-            "type": "List[TerrainFeature]",
-            "feature_types": ["PeakFeature", "ValleyFeature", "RidgeFeature", "SaddleFeature"],
-            "geometry": "points and polylines in PixelCoord space"
-        }
 
 """
     Topological Features Abstractions

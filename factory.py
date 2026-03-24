@@ -1,8 +1,9 @@
 """
-Synthetic Terrain Generator — Ground Truth Heightmaps with Known Features
+STG Factory (Synthetic Terrain Generator)
+Ground Truth Heightmaps generator with `predictable` features
 
-Generates 128×128 heightmaps with explicitly placed features.
-Each feature includes its ground truth location, shape, and properties.
+Config-aware: uses PipelineConfig to determine scale,
+synthetic terrain is generated at the same scale the pipeline will process.
 """
 
 import numpy as np
@@ -10,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict, Any
 from enum import Enum
 
-from core import Heightmap, NormalizationConfig
+from core import Heightmap, NormalizationConfig, PipelineConfig
 
 
 class FeatureType(Enum):
@@ -25,9 +26,11 @@ class FeatureType(Enum):
 class GroundTruthFeature:
     """Ground truth for a single terrain feature."""
     type: FeatureType
-    centroid: Tuple[float, float]  # pixel coordinates
+    centroid_px: Tuple[float, float]  # pixel coordinates
+    centroid_world: Tuple[float, float]  # world coordinates (meters)
     properties: Dict[str, Any] = field(default_factory=dict)
-    geometry: Optional[Any] = None  # polyline, bounding box, etc.
+    geometry_px: Optional[Any] = None
+    geometry_world: Optional[Any] = None
 
 
 @dataclass
@@ -35,179 +38,265 @@ class SyntheticTerrainResult:
     """Output from synthetic terrain generator."""
     heightmap: Heightmap
     ground_truth: List[GroundTruthFeature]
+    config: PipelineConfig
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class SyntheticTerrain:
     """
-    Generate 128×128 heightmaps with known features for validation.
+    Generate heightmaps with known features, scaled to PipelineConfig.
     
-    Features are added as mathematical surfaces and summed.
+    All feature sizes (radius, width, etc.) are specified in WORLD METERS,
+    then converted to pixels using the config's horizontal_scale.
+    This ensures features are physically meaningful at any scale.
     """
     
-    def __init__(self, size: int = 128, h_scale: float = 2.0, 
-                 v_scale: float = 0.2, sea_level: float = 10.0):
-        self.size = size
-        self.h_scale = h_scale
-        self.v_scale = v_scale
-        self.sea_level = sea_level
-        self.z = np.zeros((size, size), dtype=np.float32) + sea_level
+    def __init__(self, config: PipelineConfig, size_px: int = 128):
+        """
+        Args:
+            config: PipelineConfig that will be used for processing.
+                    Determines horizontal_scale, vertical_scale, etc.
+            size_px: Size of square heightmap in pixels.
+        """
+        self.config = config
+        self.size_px = size_px
+        self.h_scale = config.horizontal_scale
+        self.v_scale = config.vertical_scale
+        self.sea_level = config.sea_level_offset
+        
+        # Initialize empty heightmap (sea level)
+        self.z = np.full((size_px, size_px), self.sea_level, dtype=np.float32)
         self.ground_truth: List[GroundTruthFeature] = []
     
-    def add_peak(self, x: int, y: int, height: float, radius: float = 10.0,
-                 shape: str = "paraboloid") -> None:
+    def _meters_to_pixels(self, meters: float) -> float:
+        """Convert world meters to pixels at current horizontal scale."""
+        return meters / self.h_scale
+    
+    def _pixels_to_meters(self, pixels: float) -> float:
+        """Convert pixels to world meters."""
+        return pixels * self.h_scale
+    
+    def add_peak(self, x_world: float, y_world: float, height_m: float, 
+                 radius_m: float = 10.0, shape: str = "paraboloid") -> None:
         """
-        Add a peak at (x,y) with given height and radius.
+        Add a peak at world coordinates (x_world, y_world) in meters.
         
-        shape: "paraboloid" (pure convex everywhere) or "gaussian"
+        Args:
+            x_world, y_world: Peak center in world meters
+            height_m: Peak height above sea level in meters
+            radius_m: Peak radius in meters (where height drops to 0 for paraboloid)
+            shape: "paraboloid" or "gaussian"
         """
-        xx, yy = np.meshgrid(np.arange(self.size), np.arange(self.size))
-        dx = xx - x
-        dy = yy - y
+        # Convert to pixel coordinates
+        x_px = x_world / self.h_scale + self.size_px / 2
+        y_px = y_world / self.h_scale + self.size_px / 2
+        radius_px = radius_m / self.h_scale
+        
+        # Create meshgrid in pixel space
+        xx, yy = np.meshgrid(np.arange(self.size_px), np.arange(self.size_px))
+        dx = xx - x_px
+        dy = yy - y_px
         r2 = dx**2 + dy**2
-        r2_max = radius**2
+        r2_max = radius_px**2
         
         if shape == "paraboloid":
-            # z = H * (1 - r²/R²) for r <= R, 0 elsewhere
-            peak_z = height * (1 - r2 / r2_max)
+            peak_z = height_m * (1 - r2 / r2_max)
             peak_z[r2 > r2_max] = 0
         else:  # gaussian
-            sigma = radius / 2
-            peak_z = height * np.exp(-r2 / (2 * sigma**2))
+            sigma_px = radius_px / 2
+            peak_z = height_m * np.exp(-r2 / (2 * sigma_px**2))
         
         self.z += peak_z
         
         self.ground_truth.append(GroundTruthFeature(
             type=FeatureType.PEAK,
-            centroid=(float(x), float(y)),
-            properties={'height': height, 'radius': radius, 'shape': shape}
+            centroid_px=(x_px, y_px),
+            centroid_world=(x_world, y_world),
+            properties={
+                'height_m': height_m, 
+                'radius_m': radius_m, 
+                'shape': shape,
+                'prominence_m': height_m - self.sea_level
+            }
         ))
     
-    def add_ridge(self, x1: int, y1: int, x2: int, y2: int, 
-                  height: float, width: float = 5.0) -> None:
+    def add_ridge(self, x1_world: float, y1_world: float, 
+                  x2_world: float, y2_world: float,
+                  height_m: float, width_m: float = 5.0) -> None:
         """
-        Add a ridge line from (x1,y1) to (x2,y2).
-        Ridge is a Gaussian ridge with given height and width.
+        Add a ridge line from (x1,y1) to (x2,y2) in world meters.
+        
+        Args:
+            x1_world, y1_world: Start point in meters
+            x2_world, y2_world: End point in meters
+            height_m: Ridge height above sea level in meters
+            width_m: Ridge width (standard deviation of Gaussian profile) in meters
         """
-        xx, yy = np.meshgrid(np.arange(self.size), np.arange(self.size))
+        # Convert to pixel coordinates
+        cx = self.size_px / 2
+        x1_px = x1_world / self.h_scale + cx
+        y1_px = y1_world / self.h_scale + cx
+        x2_px = x2_world / self.h_scale + cx
+        y2_px = y2_world / self.h_scale + cx
+        
+        width_px = width_m / self.h_scale
+        
+        xx, yy = np.meshgrid(np.arange(self.size_px), np.arange(self.size_px))
         
         # Distance to line segment
-        px, py = x2 - x1, y2 - y1
+        px, py = x2_px - x1_px, y2_px - y1_px
         seg_len_sq = px*px + py*py
         if seg_len_sq == 0:
             return
         
-        t = ((xx - x1) * px + (yy - y1) * py) / seg_len_sq
+        t = ((xx - x1_px) * px + (yy - y1_px) * py) / seg_len_sq
         t = np.clip(t, 0, 1)
-        proj_x = x1 + t * px
-        proj_y = y1 + t * py
+        proj_x = x1_px + t * px
+        proj_y = y1_px + t * py
         dist_to_line = np.sqrt((xx - proj_x)**2 + (yy - proj_y)**2)
         
         # Gaussian ridge profile
-        ridge_z = height * np.exp(-dist_to_line**2 / (2 * width**2))
+        ridge_z = height_m * np.exp(-dist_to_line**2 / (2 * width_px**2))
         self.z += ridge_z
         
         self.ground_truth.append(GroundTruthFeature(
             type=FeatureType.RIDGE,
-            centroid=((x1+x2)/2, (y1+y2)/2),
-            properties={'height': height, 'width': width, 'start': (x1,y1), 'end': (x2,y2)},
-            geometry=[(x1,y1), (x2,y2)]
+            centroid_px=((x1_px + x2_px)/2, (y1_px + y2_px)/2),
+            centroid_world=((x1_world + x2_world)/2, (y1_world + y2_world)/2),
+            properties={
+                'height_m': height_m, 
+                'width_m': width_m, 
+                'start_world': (x1_world, y1_world), 
+                'end_world': (x2_world, y2_world)
+            },
+            geometry_px=[(x1_px, y1_px), (x2_px, y2_px)],
+            geometry_world=[(x1_world, y1_world), (x2_world, y2_world)]
         ))
     
-    def add_valley(self, x1: int, y1: int, x2: int, y2: int,
-                   depth: float, width: float = 5.0) -> None:
+    def add_valley(self, x1_world: float, y1_world: float,
+                   x2_world: float, y2_world: float,
+                   depth_m: float, width_m: float = 5.0) -> None:
         """
-        Add a valley line (negative ridge).
+        Add a valley line (negative ridge) in world coordinates.
         """
         # Same as ridge but subtract
-        xx, yy = np.meshgrid(np.arange(self.size), np.arange(self.size))
+        cx = self.size_px / 2
+        x1_px = x1_world / self.h_scale + cx
+        y1_px = y1_world / self.h_scale + cx
+        x2_px = x2_world / self.h_scale + cx
+        y2_px = y2_world / self.h_scale + cx
         
-        px, py = x2 - x1, y2 - y1
+        width_px = width_m / self.h_scale
+        
+        xx, yy = np.meshgrid(np.arange(self.size_px), np.arange(self.size_px))
+        
+        px, py = x2_px - x1_px, y2_px - y1_px
         seg_len_sq = px*px + py*py
         if seg_len_sq == 0:
             return
         
-        t = ((xx - x1) * px + (yy - y1) * py) / seg_len_sq
+        t = ((xx - x1_px) * px + (yy - y1_px) * py) / seg_len_sq
         t = np.clip(t, 0, 1)
-        proj_x = x1 + t * px
-        proj_y = y1 + t * py
+        proj_x = x1_px + t * px
+        proj_y = y1_px + t * py
         dist_to_line = np.sqrt((xx - proj_x)**2 + (yy - proj_y)**2)
         
-        valley_z = -depth * np.exp(-dist_to_line**2 / (2 * width**2))
+        valley_z = -depth_m * np.exp(-dist_to_line**2 / (2 * width_px**2))
         self.z += valley_z
         
         self.ground_truth.append(GroundTruthFeature(
             type=FeatureType.VALLEY,
-            centroid=((x1+x2)/2, (y1+y2)/2),
-            properties={'depth': depth, 'width': width, 'start': (x1,y1), 'end': (x2,y2)},
-            geometry=[(x1,y1), (x2,y2)]
+            centroid_px=((x1_px + x2_px)/2, (y1_px + y2_px)/2),
+            centroid_world=((x1_world + x2_world)/2, (y1_world + y2_world)/2),
+            properties={
+                'depth_m': depth_m, 
+                'width_m': width_m, 
+                'start_world': (x1_world, y1_world), 
+                'end_world': (x2_world, y2_world)
+            },
+            geometry_px=[(x1_px, y1_px), (x2_px, y2_px)],
+            geometry_world=[(x1_world, y1_world), (x2_world, y2_world)]
         ))
     
-    def add_saddle(self, x: int, y: int, height: float,
+    def add_saddle(self, x_world: float, y_world: float, height_m: float,
                    a: float = 0.001, b: float = 0.001,
-                   influence_radius: float = 20.0) -> None:
+                   influence_radius_m: float = 20.0) -> None:
         """
-        Add a localized saddle point using hyperboloid: z += a*dx² - b*dy² + height
-        tapered to zero outside influence_radius so it doesn't globally offset the map.
-
-        The old implementation added the constant `height` to every pixel, inflating
-        the elevation floor and making the saddle extractor's percentile gate useless.
+        Add a localized saddle point.
+        
+        Args:
+            x_world, y_world: Saddle center in world meters
+            height_m: Saddle elevation at center
+            a, b: Curvature parameters (z = a*dx² - b*dy² + height)
+            influence_radius_m: Radius in meters over which saddle tapers to zero
         """
-        xx, yy = np.meshgrid(np.arange(self.size), np.arange(self.size))
-        dx = xx - x
-        dy = yy - y
-        saddle_z = a * dx**2 - b * dy**2 + height
-        # Cosine taper: full weight at centre, zero at influence_radius
-        r = np.sqrt(dx**2 + dy**2)
-        window = np.clip((influence_radius - r) / influence_radius, 0.0, 1.0)
+        cx = self.size_px / 2
+        x_px = x_world / self.h_scale + cx
+        y_px = y_world / self.h_scale + cx
+        influence_radius_px = influence_radius_m / self.h_scale
+        
+        xx, yy = np.meshgrid(np.arange(self.size_px), np.arange(self.size_px))
+        dx_px = xx - x_px
+        dy_px = yy - y_px
+        
+        # Convert curvature parameters to pixel space
+        # a and b are in 1/m², need to scale to 1/pixel²
+        a_px = a * (self.h_scale ** 2)
+        b_px = b * (self.h_scale ** 2)
+        
+        saddle_z = a_px * dx_px**2 - b_px * dy_px**2 + height_m
+        
+        # Taper to zero at influence radius
+        r_px = np.sqrt(dx_px**2 + dy_px**2)
+        window = np.clip((influence_radius_px - r_px) / influence_radius_px, 0.0, 1.0)
         self.z += saddle_z * window
         
         self.ground_truth.append(GroundTruthFeature(
             type=FeatureType.SADDLE,
-            centroid=(float(x), float(y)),
-            properties={'height': height, 'a': a, 'b': b}
+            centroid_px=(x_px, y_px),
+            centroid_world=(x_world, y_world),
+            properties={'height_m': height_m, 'a': a, 'b': b, 'influence_radius_m': influence_radius_m}
         ))
     
-    def add_flat_zone(self, x_min: int, x_max: int, y_min: int, y_max: int,
-                      elevation: Optional[float] = None) -> None:
+    def add_flat_zone(self, x_min_world: float, x_max_world: float,
+                      y_min_world: float, y_max_world: float,
+                      elevation_m: Optional[float] = None) -> None:
         """
-        Add a flat zone (constant elevation) in bounding box.
+        Add a flat zone (constant elevation) in world coordinates.
         """
-        if elevation is None:
-            elevation = self.sea_level
+        if elevation_m is None:
+            elevation_m = self.sea_level
         
-        self.z[y_min:y_max, x_min:x_max] = elevation
+        cx = self.size_px / 2
+        x_min_px = int(x_min_world / self.h_scale + cx)
+        x_max_px = int(x_max_world / self.h_scale + cx)
+        y_min_px = int(y_min_world / self.h_scale + cx)
+        y_max_px = int(y_max_world / self.h_scale + cx)
+        
+        self.z[y_min_px:y_max_px, x_min_px:x_max_px] = elevation_m
         
         self.ground_truth.append(GroundTruthFeature(
             type=FeatureType.FLAT_ZONE,
-            centroid=((x_min+x_max)/2, (y_min+y_max)/2),
-            properties={'elevation': elevation, 'bounds': (x_min, x_max, y_min, y_max)},
-            geometry=[(x_min, y_min), (x_max, y_max)]
+            centroid_px=((x_min_px + x_max_px)/2, (y_min_px + y_max_px)/2),
+            centroid_world=((x_min_world + x_max_world)/2, (y_min_world + y_max_world)/2),
+            properties={
+                'elevation_m': elevation_m,
+                'bounds_world': (x_min_world, x_max_world, y_min_world, y_max_world)
+            }
         ))
     
     def save_png(self, filepath: str) -> None:
-        """
-        Save the current heightmap as a grayscale PNG for visual inspection.
-        
-        Converts elevation data to 0-255 grayscale using the configured vertical scale.
-        """
+        """Save current heightmap as grayscale PNG."""
         from PIL import Image
         
-        # Convert elevation to grayscale (0-255)
-        # elevation = (grayscale * v_scale) + offset
-        # so grayscale = (elevation - offset) / v_scale
         grayscale = (self.z - self.sea_level) / self.v_scale
         grayscale = np.clip(grayscale, 0, 255).astype(np.uint8)
-        
         img = Image.fromarray(grayscale, mode='L')
         img.save(filepath)
-        
         print(f"Saved heightmap to: {filepath}")
     
     def build(self) -> SyntheticTerrainResult:
-        """
-        Build final heightmap with config and return result.
-        """
+        """Build final heightmap with config and return result."""
         cfg = NormalizationConfig(
             horizontal_scale=self.h_scale,
             vertical_scale=self.v_scale,
@@ -221,12 +310,14 @@ class SyntheticTerrain:
         heightmap = Heightmap(
             data=self.z.astype(np.float32),
             config=cfg,
-            pixel_to_world=lambda p: (p[0] * self.h_scale, p[1] * self.h_scale),
-            origin=(0.0, 0.0)
+            pixel_to_world=lambda p: (p[0] * self.h_scale - self.size_px * self.h_scale / 2,
+                                       p[1] * self.h_scale - self.size_px * self.h_scale / 2),
+            origin=(-self.size_px * self.h_scale / 2, -self.size_px * self.h_scale / 2)
         )
         
         return SyntheticTerrainResult(
             heightmap=heightmap,
             ground_truth=self.ground_truth,
-            metadata={'size': self.size, 'h_scale': self.h_scale, 'v_scale': self.v_scale}
+            config=self.config,
+            metadata={'size_px': self.size_px, 'h_scale': self.h_scale, 'v_scale': self.v_scale}
         )
