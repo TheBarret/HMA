@@ -5,32 +5,21 @@ A heightmap is a 2.5D scalar field: perfect geometric surface information, zero 
 below, or what the surface means. Analysis must proceed from fundamental mathematics to derived semantics.
 
 
-##  `Mean Curvature (H)` = "How bent is the surface?"  
-
-A `Large positive Surface` that bulges `outward`; Hilltop, ridge crest, nose of slope  
-A `Large negative Surface` that bulges `inward`; Valley bottom, gully, depression  
-Or `Near zero Surface` is `flat` or a  `saddle` (needs K to distinguish); Flat plain, planar slope, cylindrical ridge  
-
-## `Gaussian Curvature (K)` = "What shape is the bend?"  
-A `Positive` same sign in both directions is a Dome (peak), bowl (depression)  
-A `Negative` opposite signs is a Saddle, pass, twisted surface  
-Or a `Near zero` one direction flat can be a Ridge (curved across, flat along), valley  
-
 ## Dependency Chain
 
-The plan of attack is to generate `Ground Truth Validation`  
-Using `synthetic terrain` to generate heightmaps with known features.  
-Compare detected output features against ground truth.  
+The plan of attack is to generate `Ground Truth Validation` using `synthetic terrain` to generate heightmaps with known features.  
+Compare detected output features against ground truth using predefined config parameters located `core.py`.  
 
-```
-Calibration → First Derivatives → Second Derivatives → Topology  →  Relations → Semantics
--------------------------------------------------------------------------------------------
-     ↓              ↓                   ↓                 ↓             ↓           ↓
-  Clean   →     Slope/Aspect    →    Curvature     →   Features  →  Networks  →  Meaning
-```
+## Pipeline Architecture
 
-<img width="1024" alt="t_saddle_detail" src="https://github.com/user-attachments/assets/f798a0e7-fa6e-4b20-b866-a04332294d94" />
-
+| Layer | Name | Output | Key Parameters | Dependencies |
+|:-----:|------|--------|----------------|--------------|
+| **0** | **Calibration** | Clean Surface | `h_scale=2.0 m/px`<br/>`v_scale=0.2 m/unit`<br/>`noise_sigma=2.0` | Raw heightmap |
+| **1** | **Local Geometry** | Slope (0-90°)<br/>Aspect (0-360°) | `gradient_method=central`<br/>`flat_threshold=0.5°` | Layer 0 |
+| **2** | **Regional Geometry** | Mean Curvature H<br/>Gaussian Curvature K<br/>6-Type Classification | `H_eps_min=1e-4`<br/>`K_eps_min=1e-5`<br/>`adaptive=True` | Layer 1 |
+| **3** | **Topology** | Peaks ▲<br/>Ridges ━<br/>Valleys ━<br/>Saddles ●<br/>Flat Zones ■ | `peak_prominence=2m`<br/>`ridge_length=6px`<br/>`saddle_K=2e-4`<br/>`flat_slope=3°` | Layer 2 |
+| **4** | **Relational** | Visibility Graph<br/>Flow Network<br/>Connectivity Graph | `vis_range=1200m`<br/>`conn_radius=200m`<br/>`flow_step=10px` | Layer 3 |
+| **5** | **Semantics** | Defensive Positions<br/>Observation Points<br/>Assembly Areas<br/>Chokepoints | `def_prominence=8m`<br/>`obs_visibility=10`<br/>`assembly_area=2000m²` | Layer 4 |
 
 # Early Testing
 
@@ -66,6 +55,16 @@ Calibration → First Derivatives → Second Derivatives → Topology  →  Rela
 
 ### Layer 2: Regional Geometry (Second Derivatives)
 *What shape does the neighborhood form around this point?*
+
+*`Mean Curvature (H)` = "How bent is the surface?"*  
+A `Large positive Surface` that bulges `outward`; Hilltop, ridge crest, nose of slope  
+A `Large negative Surface` that bulges `inward`; Valley bottom, gully, depression  
+Or `Near zero Surface` is `flat` or a  `saddle` (needs K to distinguish); Flat plain, planar slope, cylindrical ridge  
+
+*`Gaussian Curvature (K)` = "What shape is the bend?"*  
+A `Positive` same sign in both directions is a Dome (peak), bowl (depression)  
+A `Negative` opposite signs is a Saddle, pass, twisted surface  
+Or a `Near zero` one direction flat can be a Ridge (curved across, flat along), valley  
 
 - **Input:** Gradient maps
 - **Operations:**
