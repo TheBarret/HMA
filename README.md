@@ -4,11 +4,8 @@
 A heightmap is a 2.5D scalar field: perfect geometric surface information, zero information about what lies above, 
 below, or what the surface means. Analysis must proceed from fundamental mathematics to derived semantics.
 
-
-## Dependency Chain
-
-The plan of attack is to generate `Ground Truth Validation` using `synthetic terrain` to generate heightmaps with known features.  
-Compare detected output features against ground truth using predefined config parameters located `core.py`.  
+The plan of attack is to generate `Ground Truth Validation` using `synthetic terrain`  to generate heightmaps with known features,  
+compare detected output features against ground truth using predefined config parameters located `core.py`.  
 
 ## Pipeline Architecture
 
