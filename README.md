@@ -29,9 +29,7 @@ Calibration → First Derivatives → Second Derivatives → Topology  →  Rela
   Clean   →     Slope/Aspect    →    Curvature     →   Features  →  Networks  →  Meaning
 ```
 
-## Debugging the pipeline
-
-<img width="512" alt="debug-preview" src="https://github.com/user-attachments/assets/367d574e-4c44-42b0-b11c-0c69086d1970" />
+<img width="1024" alt="t_saddle_detail" src="https://github.com/user-attachments/assets/f798a0e7-fa6e-4b20-b866-a04332294d94" />
 
 
 ## Demonstration Input
