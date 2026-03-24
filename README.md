@@ -20,8 +20,10 @@ compare detected output features against ground truth using predefined config pa
 
 # Early Testing
 
-<img width="1024" alt="heightmap_small_analysis" src="https://github.com/user-attachments/assets/8969e7e5-4e13-46f9-a7ab-bb0de1f445d7" />
 
+<img width="1024" alt="spike_analysis" src="https://github.com/user-attachments/assets/ec3dd409-7122-45ee-aa36-82d2beab0656" />
+<img width="1024" alt="river_analysis" src="https://github.com/user-attachments/assets/d78c867e-8bef-40b4-b274-5abd284d6177" />
+<img width="1024" alt="3point_analysis" src="https://github.com/user-attachments/assets/2476fdd1-c7ff-47cb-9051-294af8f984d8" />
 
 ## The Analysis Pipeline
 
