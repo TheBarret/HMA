@@ -32,14 +32,15 @@ Calibration → First Derivatives → Second Derivatives → Topology  →  Rela
 <img width="1024" alt="t_saddle_detail" src="https://github.com/user-attachments/assets/f798a0e7-fa6e-4b20-b866-a04332294d94" />
 
 
-## Demonstration Input
+# Early Testing
+
+## Input
 
 <img width="1024" alt="heightmap" src="https://github.com/user-attachments/assets/389fef25-d30a-423a-9a26-efbcce78c48e" />
 
 ## Output
 
 <img width="1024" alt="unified_analysis" src="https://github.com/user-attachments/assets/736473f6-e60a-45f5-8c07-f68304f7f76f" />
-
 
 ## The Analysis Pipeline
 
