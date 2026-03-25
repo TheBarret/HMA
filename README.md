@@ -20,7 +20,7 @@ compare detected output features against ground truth using predefined config pa
 
 # Early Testing
 
-<img width="1240" alt="3point_analysis" src="https://github.com/user-attachments/assets/2476fdd1-c7ff-47cb-9051-294af8f984d8" />
+<img width="1024" alt="heightmap_large_analysis" src="https://github.com/user-attachments/assets/1f60df2c-bd06-42ad-b4f2-206c71ca8ba2" />
 
 ## The Analysis Pipeline
 
