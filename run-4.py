@@ -33,7 +33,7 @@ from semantics import Layer5_Semantics
 SEMANTIC_MARKERS = {
     # Peaks
     "defensive_position": {"marker": "^", "color": "crimson", "size": 40, "label": "Defensive"},
-    "observation_post":   {"marker": "*", "color": "gold",    "size": 50, "label": "Observation"},
+    "observation_post":   {"marker": "*", "color": "cyan",    "size": 16, "label": "Observation"},
     "major_peak":         {"marker": "P", "color": "red",     "size": 35, "label": "Major Peak"},
     "minor_peak":         {"marker": "^", "color": "salmon",  "size": 25, "label": "Minor Peak"},
     
@@ -272,6 +272,7 @@ def plot_layer4(ax: plt.Axes, data: Dict):
 
 
 # -----------------------------------------------------------------------------------------
+
 def plot_flow_direction(ax: plt.Axes, data: Dict):
     """
     Show flow direction as a quiver plot - FAST.
@@ -455,17 +456,16 @@ def plot_semantic_layer(ax: plt.Axes, data: Dict, config: PipelineConfig):
                 ha='center', va='center', fontsize=10, color='gray')
         return
     
-    # --- Base: Grayscale heightmap with subtle contours ---
+    # Grayscale heightmap with subtle contours ---
     ax.imshow(heightmap, cmap='gray_r', interpolation='bilinear', alpha=0.9)
     
-    # Optional: light contour lines for elevation context
-    levels = np.linspace(np.min(heightmap), np.max(heightmap), 8)
-    ax.contour(heightmap, levels=levels, colors='white', linewidths=0.3, alpha=0.3)
+    # elevation context
+    #levels = np.linspace(np.min(heightmap), np.max(heightmap), 8)
+    #ax.contour(heightmap, levels=levels, colors='white', linewidths=0.3, alpha=0.3)
     
     # --- Plot semantic markers ---
     plotted_labels = set()  # Track for clean legend
     
-    # FIX: Helper translates 'size' → 's' for scatter compatibility
     def plot_marker(x, y, style_dict, label):
         # Translate matplotlib-incompatible keys
         kwargs = {}
@@ -648,8 +648,10 @@ def visualize_pipeline(png_path: str, output_name: str = None):
 
     # --- Plot each layer ---
     plot_layer0(ax_l0, data, marker_scale=0.5)
-    plot_layer1(ax_l1, data)
-    plot_layer2(ax_l2, data)
+    #plot_layer1(ax_l1, data)
+    plot_visibility_density(ax_l1, data)
+    #plot_layer2(ax_l2, data)
+    plot_flow_direction(ax_l2, data)
     plot_layer3(ax_l3, data, marker_scale=0.5)  # Smaller markers
     
     # Large semantic plot (full size markers)

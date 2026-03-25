@@ -43,8 +43,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         
         # Coverage filtering
         self._max_feature_coverage = 0.5  # Max 50% of map for any single feature
-        
-        print(f"Layer5_Semantics initialized for {self.game_type.value}")
+
     
     def _get_template_thresholds(self) -> Dict[str, Any]:
         """Get game-specific tactical thresholds."""
@@ -519,9 +518,8 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
     def _log_semantic_summary(self, analyzed: AnalyzedTerrain) -> None:
         """Log semantic classification summary."""
         print("\n" + "=" * 60)
-        print("LAYER 5: SEMANTIC INTERPRETATION")
-        print(f"Game Type: {self.game_type.value}")
-        print("=" * 60)
+        print("SEMANTIC RESULT")
+        print(f"Template: {self.game_type.value}")
         
         # Extract semantic tags
         defensive = [p for p in analyzed.peaks if 'defensive_position' in p.metadata.get('semantic_tags', [])]
