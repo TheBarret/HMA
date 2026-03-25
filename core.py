@@ -222,7 +222,7 @@ class PipelineConfig:
     # LAYER 5: SEMANTICS - Domain Interpretation
     # =========================================================================
     
-    game_type: GameType = GameType.CUSTOM       # [ARMA_2/ARMA_3/WAR_THUNDER/WORLD_OF_TANKS/CUSTOM]
+    game_type: GameType = GameType.ARMA_3       # [ARMA_2/ARMA_3/WAR_THUNDER/WORLD_OF_TANKS/CUSTOM]
     
     # --- Defensive Positions ---
     defensive_min_prominence_m: float = 8.0     # [5-30] meters, minimum height advantage

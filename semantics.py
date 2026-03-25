@@ -38,15 +38,15 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         super().__init__(config)
         self.game_type = config.game_type
         
-        # Game-specific tactical thresholds
-        self._tactical_thresholds = self._get_game_thresholds()
+        # Template thresholds
+        self._template_thresholds = self._get_template_thresholds()
         
         # Coverage filtering
         self._max_feature_coverage = 0.5  # Max 50% of map for any single feature
         
         print(f"Layer5_Semantics initialized for {self.game_type.value}")
     
-    def _get_game_thresholds(self) -> Dict[str, Any]:
+    def _get_template_thresholds(self) -> Dict[str, Any]:
         """Get game-specific tactical thresholds."""
         thresholds = {
             GameType.ARMA_3: {
@@ -122,8 +122,19 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         Returns:
             AnalyzedTerrain: Fully populated terrain analysis with semantic tags
         """
+        
         # Extract from bundle
         features = input_data.get('features', [])
+        if not features:
+            self._log("No features found. critical for semantic index")
+            return AnalyzedTerrain(
+                source_heightmap=input_data['heightmap'],
+                peaks=[], valleys=[], ridges=[], saddles=[], flat_zones=[],
+                visibility_graph={}, flow_network={}, connectivity_graph={},
+                watersheds={}, flow_accumulation=None,
+                semantic_index=self._build_empty_semantic_index()
+            )
+        
         visibility = input_data.get('visibility_graph', {})
         flow_network = input_data.get('flow_network', {})
         connectivity = input_data.get('connectivity_graph', {})
@@ -133,8 +144,9 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         slope = input_data.get('slope', None)
         
         if heightmap is None:
-            raise ValueError("Heightmap required for AnalyzedTerrain")
+            self._log("No heightmap found, critical for [AnalyzedTerrain]")
         
+       
         # Separate features by type
         peaks = [f for f in features if isinstance(f, PeakFeature)]
         ridges = [f for f in features if isinstance(f, RidgeFeature)]
@@ -187,7 +199,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         cell_size = heightmap.config.horizontal_scale
         total_area_m2 = heightmap.shape[0] * heightmap.shape[1] * (cell_size ** 2)
         max_feature_area = total_area_m2 * self._max_feature_coverage
-        thresholds = self._tactical_thresholds
+        thresholds = self._template_thresholds
         
         # --- Classify Peaks (Defensive Positions + Observation Posts) ---
         for peak in peaks:
@@ -323,10 +335,15 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             flat.metadata['semantic_tags'] = tags
     
     def _build_semantic_index(self, peaks, ridges, valleys, saddles, flat_zones,
-                               visibility, connectivity, flow_network, heightmap) -> Dict[str, Any]:
+                           visibility, connectivity, flow_network, heightmap) -> Dict[str, Any]:
         """
         Build searchable semantic index for tactical queries.
         """
+        # FIX: Handle empty feature lists gracefully
+        if not peaks and not ridges and not valleys and not saddles and not flat_zones:
+            self._log("WARNING: No features available. Semantic index will be empty.")
+            return self._build_empty_semantic_index()
+        
         semantic_index = {
             'defensive_positions': [],
             'observation_posts': [],
@@ -344,38 +361,47 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             }
         }
         
-        # Validate classification ran
-        if self.config.verbose and not peaks[0].metadata.get('semantic_tags'):
-            print("_build_semantic_index() Peak features missing semantic_tags, required for classification")
+        # FIX: Read thresholds from config, not hardcoded
+        thresholds = self._get_template_thresholds()
         
-        # Defensive positions
+        # --- Defensive Positions ---
         for peak in peaks:
+            # safe metadata access with default empty list
             tags = peak.metadata.get('semantic_tags', [])
+            
             if 'defensive_position' in tags:
+                visible_set = visibility.get(peak.feature_id, set())
+                visible_count = len(visible_set) if visible_set else 0
+                
                 semantic_index['defensive_positions'].append({
                     'id': peak.feature_id,
                     'centroid': peak.centroid,
                     'elevation': peak.elevation_range[1],
                     'prominence': peak.prominence,
                     'defensive_score': peak.metadata.get('defensive_score', 0),
-                    'visibility_count': len(visibility.get(peak.feature_id, []))
+                    'visibility_count': visible_count
                 })
         
-        # Observation posts
+        # --- Observation Posts ---
         for peak in peaks:
             tags = peak.metadata.get('semantic_tags', [])
+            
             if 'observation_post' in tags:
+                visible_set = visibility.get(peak.feature_id, set())
+                visible_count = len(visible_set) if visible_set else 0
+                
                 semantic_index['observation_posts'].append({
                     'id': peak.feature_id,
                     'centroid': peak.centroid,
                     'elevation': peak.elevation_range[1],
                     'prominence': peak.prominence,
-                    'visibility_count': len(visibility.get(peak.feature_id, []))
+                    'visibility_count': visible_count
                 })
         
-        # Chokepoints
+        # --- Chokepoints ---
         for saddle in saddles:
             tags = saddle.metadata.get('semantic_tags', [])
+            
             if 'chokepoint' in tags:
                 semantic_index['chokepoints'].append({
                     'id': saddle.feature_id,
@@ -384,9 +410,10 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                     'connectivity_degree': saddle.metadata.get('chokepoint_degree', 0)
                 })
         
-        # Assembly areas
+        # --- Assembly Areas ---
         for flat in flat_zones:
             tags = flat.metadata.get('semantic_tags', [])
+            
             if 'assembly_area' in tags or 'major_assembly_area' in tags:
                 semantic_index['assembly_areas'].append({
                     'id': flat.feature_id,
@@ -396,9 +423,10 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                     'trafficability': flat.metadata.get('trafficability_rating', 0.5)
                 })
         
-        # Cover positions
+        # --- Cover Positions ---
         for ridge in ridges:
             tags = ridge.metadata.get('semantic_tags', [])
+            
             if 'defensive_cover' in tags:
                 semantic_index['cover_positions'].append({
                     'id': ridge.feature_id,
@@ -407,21 +435,43 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                     'quality': ridge.metadata.get('cover_quality', 0)
                 })
         
-        # Ambush positions
+        # --- Ambush Positions ---
         for valley in valleys:
             tags = valley.metadata.get('semantic_tags', [])
+            
             if 'ambush_potential' in tags:
                 semantic_index['ambush_positions'].append({
                     'id': valley.feature_id,
                     'spine': valley.spine_points,
-                    'rating': valley.metadata.get('ambush_rating', 0)
+                    'rating': valley.metadata.get('ambush_rating', 0),
+                    'centroid': valley.centroid,
                 })
         
-        # Vehicle routes (extract from connectivity graph)
+        # --- Vehicle Routes ---
         vehicle_routes = self._extract_vehicle_routes(connectivity, heightmap)
         semantic_index['vehicle_routes'] = vehicle_routes
         
         return semantic_index
+
+
+    def _build_empty_semantic_index(self) -> Dict[str, Any]:
+        """Return empty semantic index structure when no features exist."""
+        return {
+            'defensive_positions': [],
+            'observation_posts': [],
+            'chokepoints': [],
+            'assembly_areas': [],
+            'cover_positions': [],
+            'ambush_positions': [],
+            'vehicle_routes': [],
+            'feature_summary': {
+                'total_peaks': 0,
+                'total_ridges': 0,
+                'total_valleys': 0,
+                'total_saddles': 0,
+                'total_flat_zones': 0,
+            }
+        }
     
     def _extract_vehicle_routes(self, connectivity: Dict, heightmap: Heightmap) -> List[Dict]:
         """
