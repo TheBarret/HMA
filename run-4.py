@@ -623,7 +623,7 @@ def visualize_pipeline(png_path: str, output_name: str = None):
       Right column (70%): L5 Semantic Layer (full height)
     """
     print(f"Loading: {png_path}")
-    config = PipelineConfig(game_type=GameType.CUSTOM)
+    config = PipelineConfig(game_type=GameType.ARMA_3)
     config.verbose = True
 
     data = run_pipeline(png_path, config)  # Includes Layer 5 now
@@ -683,5 +683,3 @@ if __name__ == '__main__':
         png_path = sys.argv[1]
         output = sys.argv[2] if len(sys.argv) > 2 else f'{Path(png_path).stem}_analysis.png'
         visualize_pipeline(png_path, output)
-    else:
-        print('Usage: python visualize.py <heightmap.png> [output.png]')
