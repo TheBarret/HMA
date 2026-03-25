@@ -25,6 +25,85 @@ Compare detected output features against ground truth will calibrate our model, 
 
 <img width="1024" alt="sols_analysis" src="https://github.com/user-attachments/assets/7192dc64-5e85-4498-b084-9c43c29dbf90" />
 
+console:  
+```
+python run-4.py .\assets\sols.jpg
+Loading: .\assets\sols.jpg
+[Calibration] Validating input: RawImageInput
+[Calibration] Using provided calibration: h_scale=2.0, v_scale=0.2
+[Calibration] Building coordinate transform
+[Calibration] Using identity coordinate transform
+[Calibration] Converting to elevation: shape=(896, 832)
+[Calibration] Applying Gaussian blur: sigma=2.0
+[Calibration] Validating output surface
+[Calibration] Creating Heightmap object
+[Geometry] Computing slope/aspect | shape=(896, 832), cell_size=2.0000m
+[Geometry] Computing central differences gradient
+[Geometry] Validating derivative fields
+[Geometry] Flat areas: 36.7% of map, setting aspect=0
+[Geometry] Output: slope=[0.00°, 48.58°]
+[Regional] Computing curvature fields | shape=(896, 832), cell_size=2.0000m
+[Regional] Computing gradients and second derivatives
+[Regional] Validating curvature fields
+[Regional] Determining epsilon thresholds
+[Regional] Using adaptive epsilon [45.0 percentile]
+[Regional] Epsilon clamp range MIN: H=5e-05, K=5e-06
+[Regional] Epsilon clamp range MAX: H=0.05, K=0.001
+[Regional] Adaptive epsilon is set to H=0.001879, K=0.000018
+[Regional] Classifying curvature | H_eps=0.001879, K_eps=0.000018
+[Regional] Classification results: CONVEX=40565 (5.4%), CONCAVE=57260 (7.7%), SADDLE=127160 (17.1%), FLAT=358146 (48.0%)
+[Topological] Starting feature extraction | shape=(896, 832), cell_size=2.0000m
+[Topological] Extracting peaks
+[Topological] Peak candidates: 183 regional maxima
+[Topological] Peaks validated: 80 (convex_ratio threshold=0.05)
+[Topological] Peaks extracted: 80
+[Topological] Extracting ridges
+[Topological] Ridge mask pixels: 121859 (16.3%)
+[Topological] Ridge candidates: 195 (min_length=10px)
+[Topological] Ridges validated: 195
+[Topological] Ridges extracted: 195
+[Topological] Extracting valleys
+[Topological] Valley mask pixels: 138307 (18.6%)
+[Topological] Valley candidates: 187 (min_length=10px)
+[Topological] Valleys validated: 187
+[Topological] Valleys extracted: 187
+[Topological] Extracting saddles
+[Topological] Saddle candidates: 125231 from curvature classification
+[Topological] Saddle statistics: K min=1.78e-05, K max=1.20e-03, K threshold=2.00e-04, confidence threshold=1.00
+[Topological] Saddle parameters: k_threshold=2.00e-04, confidence_threshold=1.00
+[Topological] Saddles extracted: 212
+[Topological] Extracting flat zones
+[Topological] Flat zone mask pixels: 362194 (48.6%)
+[Topological] Flat zone candidates: 516 (min_size=450px)
+[Topological] Flat zones validated: 30
+[Topological] Flat zones extracted: 30
+[Topological] Purged 152 features below 8.0m reference
+[Topological] sea-level filter: 704 → 552 features (152 removed)
+[Topological] Extraction complete | total=552, peaks=80, ridges=195, valleys=187, saddles=212, flat_zones=30
+[Topological] Average peak confidence: 1.130
+[Relational] Building Visibility Graph...
+[Relational] Building Flow Network...
+[Relational] Building Connectivity Graph...
+[Relational] Delineating Watersheds
+[Relational] Identified 146 watershed outlets
+[Relational] Visibility: 371 connected nodes, 8129 edges
+[Relational] Flow Network: 54 nodes with downstream, 54 edges
+[Relational] Connectivity: 545 connected nodes, 1752 edges
+[Relational] Watersheds: 146 basins
+[Relational] Average basin size: 1.0 features
+[Semantics] using template: GameType.CUSTOM
+[Semantics] max n-% feature coverage: 0.5
+[Semantics] analysing data bundle...
+[Semantics] building index...
+[Semantics]  -> Defensive Positions
+[Semantics]  -> Observation Positions
+[Semantics]  -> Chokepoint Positions
+[Semantics]  -> Assembly Areas
+[Semantics]  -> Cover Positions
+[Semantics]  -> Ambush Positions
+Saved: sols_analysis.png
+```
+
 ## The Analysis Pipeline
 
 ### Layer 0: Calibration (The Observable)
