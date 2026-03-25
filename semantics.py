@@ -39,12 +39,18 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         self.game_type = config.game_type
         
         # Template thresholds
+        self._log(f'using template: {self.game_type}')
         self._template_thresholds = self._get_template_thresholds()
         
         # Coverage filtering
-        self._max_feature_coverage = 0.5  # Max 50% of map for any single feature
+        self._max_feature_coverage = self.config.max_feature_coverage
+        self._log(f'max n-% feature coverage: {self._max_feature_coverage}')
 
-    
+    def _log(self, msg: str) -> None:
+        """Helper for verbose logging"""
+        if self.config.verbose:
+            print(f"[Semantics] {msg}")
+            
     def _get_template_thresholds(self) -> Dict[str, Any]:
         """Get game-specific tactical thresholds."""
         thresholds = {
@@ -123,6 +129,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         """
         
         # Extract from bundle
+        self._log('analysing data bundle...')
         features = input_data.get('features', [])
         if not features:
             self._log("No features found. critical for semantic index")
@@ -145,7 +152,6 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         if heightmap is None:
             self._log("No heightmap found, critical for [AnalyzedTerrain]")
         
-       
         # Separate features by type
         peaks = [f for f in features if isinstance(f, PeakFeature)]
         ridges = [f for f in features if isinstance(f, RidgeFeature)]
@@ -182,7 +188,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         )
         
         # Log semantic summary
-        self._log_semantic_summary(analyzed)
+        #self._log_semantic_summary(analyzed)
         
         return analyzed
     
@@ -224,9 +230,9 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 peak.metadata['observation_score'] = min(1.0, visible_count / 15.0)
             
             # Major/Minor classification
-            if peak.prominence > 15.0:
+            if peak.prominence > self.config.threshold_major_peak:
                 tags.append("major_peak")
-            elif peak.prominence > 5.0:
+            elif peak.prominence > self.config.threshold_minor_peak:
                 tags.append("minor_peak")
             else:
                 tags.append("hill")
@@ -267,10 +273,9 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             
             # Ambush potential (narrow valleys with steep sides)
             avg_slope = valley.metadata.get('avg_slope', 10.0)
-            if avg_slope > 15.0:
+            if avg_slope > self.config.valley_avg_slope:
                 tags.append("ambush_potential")
                 valley.metadata['ambush_rating'] = min(1.0, avg_slope / 30.0)
-            
             valley.metadata['semantic_tags'] = tags
         
         # --- Classify Saddles (Chokepoints) ---
@@ -284,18 +289,11 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 tags.append("chokepoint")
                 saddle.metadata['chokepoint_degree'] = conn_degree
         
-        #for saddle in saddles:
-        #    tags = []
-        #    conn_degree = len(connectivity.get(saddle.feature_id, []))
-        # Chokepoint detection (connectivity-based)
-        #   if conn_degree >= thresholds["chokepoint_min_connectivity"]:
-        #        tags.append("chokepoint")
-        #        saddle.metadata['chokepoint_degree'] = conn_degree
-            
             # Pass classification
-            if saddle.elevation > 30:
+            
+            if saddle.elevation > self.config.saddle_elevation_high:
                 tags.append("high_pass")
-            elif saddle.elevation > 10:
+            elif saddle.elevation > self.config.saddle_elevation_low:
                 tags.append("low_pass")
             else:
                 tags.append("col")
@@ -338,9 +336,8 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         """
         Build searchable semantic index for tactical queries.
         """
-        # FIX: Handle empty feature lists gracefully
         if not peaks and not ridges and not valleys and not saddles and not flat_zones:
-            self._log("WARNING: No features available. Semantic index will be empty.")
+            self._log("No features available. Semantic index will be empty.")
             return self._build_empty_semantic_index()
         
         semantic_index = {
@@ -360,10 +357,11 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             }
         }
         
-        # FIX: Read thresholds from config, not hardcoded
         thresholds = self._get_template_thresholds()
+        self._log("building index...")
         
         # --- Defensive Positions ---
+        self._log(" -> Defensive Positions")
         for peak in peaks:
             # safe metadata access with default empty list
             tags = peak.metadata.get('semantic_tags', [])
@@ -382,6 +380,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 })
         
         # --- Observation Posts ---
+        self._log(" -> Observation Positions")
         for peak in peaks:
             tags = peak.metadata.get('semantic_tags', [])
             
@@ -398,6 +397,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 })
         
         # --- Chokepoints ---
+        self._log(" -> Chokepoint Positions")
         for saddle in saddles:
             tags = saddle.metadata.get('semantic_tags', [])
             
@@ -410,6 +410,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 })
         
         # --- Assembly Areas ---
+        self._log(" -> Assembly Areas")
         for flat in flat_zones:
             tags = flat.metadata.get('semantic_tags', [])
             
@@ -423,6 +424,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 })
         
         # --- Cover Positions ---
+        self._log(" -> Cover Positions")
         for ridge in ridges:
             tags = ridge.metadata.get('semantic_tags', [])
             
@@ -435,6 +437,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 })
         
         # --- Ambush Positions ---
+        self._log(" -> Ambush Positions")
         for valley in valleys:
             tags = valley.metadata.get('semantic_tags', [])
             

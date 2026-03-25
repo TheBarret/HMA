@@ -13,7 +13,6 @@ from scipy import ndimage
 from scipy.spatial import KDTree
 from typing import Dict, List, Set, Tuple, Optional
 from collections import defaultdict
-import warnings
 import heapq
 
 from core import (

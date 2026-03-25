@@ -28,6 +28,7 @@ from topological import Layer3_TopologicalFeatures
 from relational import Layer4_Relational
 from semantics import Layer5_Semantics
 
+from cache import PipelineCache, CachedPipeline, log_start, log_complete
 
 # Semantic marker styles: small, high-contrast, grayscale-friendly
 SEMANTIC_MARKERS = {
@@ -616,19 +617,28 @@ def plot_stats_bar(ax: plt.Axes, data: Dict):
 
 def visualize_pipeline(png_path: str, output_name: str = None):
     """
-    Render full pipeline analysis with improved layout.
-    
+    Render full pipeline analysis.
     Layout:
-      Left column (30%):  L0, L1, L2, L3 (stacked vertically)
-      Right column (70%): L5 Semantic Layer (full height)
+      Left Column (30%):  L0, L1, L2, L3 (stacked vertically)
+      Right Column (70%): L5 Semantic Layer (full height)
     """
     print(f"Loading: {png_path}")
-    config = PipelineConfig(game_type=GameType.ARMA_3)
+    config = PipelineConfig(game_type=GameType.CUSTOM)
     config.verbose = True
+    
+    # Use full-send pipeline
+    data = run_pipeline(png_path, config)
+    
+    # Use cache-aware pipeline
+    #pipeline = CachedPipeline(
+    #    cache_dir="./cached",
+    #    pre_tasks=[log_start],
+    #    post_tasks=[log_complete],
+    #    run_pipeline_func=run_pipeline
+    #)
+    #data = pipeline.run(png_path, config)
+    
 
-    data = run_pipeline(png_path, config)  # Includes Layer 5 now
-
-    # Create figure with asymmetric columns: 1:3 width ratio
     fig = plt.figure(figsize=(16, 14))
     gs = fig.add_gridspec(
         nrows=4, ncols=2,
@@ -636,35 +646,28 @@ def visualize_pipeline(png_path: str, output_name: str = None):
         height_ratios=[1, 1, 1, 1],  # Equal height for left plots
         hspace=0.15, wspace=0.1   # Tight spacing
     )
-
-    # --- Left column: Small layer plots (stacked) ---
+    
     ax_l0 = fig.add_subplot(gs[0, 0])
     ax_l1 = fig.add_subplot(gs[1, 0])
     ax_l2 = fig.add_subplot(gs[2, 0])
     ax_l3 = fig.add_subplot(gs[3, 0])
 
-    # --- Right column: Large Semantic Layer (spans all rows) ---
     ax_semantic = fig.add_subplot(gs[:, 1])
-
-    # --- Plot each layer ---
+    
     plot_layer0(ax_l0, data, marker_scale=0.5)
     #plot_layer1(ax_l1, data)
     plot_visibility_density(ax_l1, data)
     #plot_layer2(ax_l2, data)
     plot_flow_direction(ax_l2, data)
     plot_layer3(ax_l3, data, marker_scale=0.5)  # Smaller markers
-    
-    # Large semantic plot (full size markers)
     plot_semantic_layer(ax_semantic, data, config)
 
-    # --- Global title ---
     plt.suptitle(f'Terrain Analysis: {Path(png_path).stem}', 
                  fontsize=14, fontweight='bold', y=0.995)
 
     # --- Tight layout to prevent clipping ---
-    plt.tight_layout(rect=[0, 0, 1, 0.97])  # Leave room for suptitle
+    #plt.tight_layout(rect=[0, 0, 1, 0.97]) # throws warning
 
-    # --- Save or show ---
     if output_name:
         plt.savefig(output_name, dpi=150, bbox_inches='tight', facecolor='white')
         print(f"Saved: {output_name}")

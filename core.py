@@ -219,12 +219,22 @@ class PipelineConfig:
     watershed_sample_step_px: int = 10          # [5-20] pixels, step size for watershed delineation
     
     # =========================================================================
-    # LAYER 5: SEMANTICS - Domain Interpretation
+    # LAYER 5: SEMANTICS
     # =========================================================================
     
     game_type: GameType = GameType.ARMA_3       # [ARMA_2/ARMA_3/WAR_THUNDER/WORLD_OF_TANKS/CUSTOM]
+    max_feature_coverage: float = 0.5           # Max 50% of map for any single feature
     
     # --- Defensive Positions ---
+    
+    # classification thresholds
+    threshold_major_peak: float = 15.0          # major peaks [m]
+    threshold_minor_peak: float = 5.0           # minor peaks [m]
+    saddle_elevation_high: float = 30.0         # saddle elevation high [m]
+    saddle_elevation_low: float = 10.0          # saddle elevation low [m]
+    valley_avg_slope: float = 15.0              # valley avg slope [m]
+    
+    
     defensive_min_prominence_m: float = 8.0     # [5-30] meters, minimum height advantage
     defensive_min_elevation_m: float = 5.0      # [2-20] meters, minimum absolute height
     defensive_max_slope_deg: float = 25.0       # [15-35] degrees, max slope for defense
@@ -241,6 +251,7 @@ class PipelineConfig:
     # --- Chokepoints ---
     chokepoint_min_connectivity: int = 2        # [2-5] minimum connections to be chokepoint
     cover_min_width_m: float = 5.0              # [2-15] meters, minimum cover width
+    
     
     # =========================================================================
     # ADDITIONAL FIELDS - Movement & Terrain Classification
