@@ -20,7 +20,7 @@ compare detected output features against ground truth using predefined config pa
 
 # Early Testing
 
-<img width="1024" alt="heightmap_large_analysis" src="https://github.com/user-attachments/assets/1f60df2c-bd06-42ad-b4f2-206c71ca8ba2" />
+<img width="1024" alt="sols_analysis" src="https://github.com/user-attachments/assets/7192dc64-5e85-4498-b084-9c43c29dbf90" />
 
 ## The Analysis Pipeline
 
