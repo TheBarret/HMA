@@ -85,6 +85,16 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         features.extend(flat_zones)
         self._log(f"Flat zones extracted: {len(flat_zones)}")
 
+        # sea-level control filter
+        original_count = len(features)
+        features = self._purge_sea_domain(features)
+        if (original_count - len(features)) == 0:
+            self._log(f"No features detected, seal-level parameters might be too aggressive")
+            
+        if self.config.verbose and original_count != len(features):
+            self._log(f"sea-level filter: {original_count} → {len(features)} features ({original_count - len(features)} removed)")
+            
+        # commit
         self._build_feature_hierarchy(features)
 
         if self.config.verbose:
@@ -94,6 +104,55 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 self._log(f"Average peak confidence: {avg_confidence:.3f}")
 
         return features
+
+    def _purge_sea_domain(self, features: List[TerrainFeature]) -> List[TerrainFeature]:
+        """
+        Filter out features below the elevation reference threshold.
+        
+        Uses feature's MAX elevation for peaks/ridges (crest matters),
+        but MIN elevation for valleys (bottom matters for drainage).
+        
+        Returns:
+            List of features that meet elevation criteria
+        """
+        if not self.config.exclude_below_reference:
+            return features  # No filtering, return all
+        
+        ref = self.config.elevation_reference_m
+        filtered = []
+        filtered_count = 0
+        
+        for feature in features:
+            min_z, max_z = feature.elevation_range
+            
+            # Type-specific elevation logic
+            if isinstance(feature, (PeakFeature, RidgeFeature)):
+                # For peaks/ridges, use MAX elevation (crest/summit)
+                # A ridge that peaks above reference is valid even if base is low
+                passes = max_z >= ref
+            elif isinstance(feature, (ValleyFeature, FlatZoneFeature)):
+                # For valleys/flats, use MIN elevation (bottom)
+                # A valley entirely below reference may be "submerged"
+                passes = min_z >= ref
+            elif isinstance(feature, SaddleFeature):
+                # Saddles are passes - use average elevation
+                avg_z = (min_z + max_z) / 2.0
+                passes = avg_z >= ref
+            else:
+                # Default: use max elevation (conservative)
+                passes = max_z >= ref
+            
+            if passes:
+                filtered.append(feature)
+            else:
+                filtered_count += 1
+                # Optional: track filtered features for debugging
+                feature.metadata['filtered_reason'] = f'below_reference_{ref}m'
+        
+        if self.config.verbose and filtered_count > 0:
+            self._log(f"Purged {filtered_count} features below {ref}m reference")
+        
+        return filtered
 
     def _calculate_confidence_weights(self, gaussian_curvature: ScalarField) -> np.ndarray:
         """Calculate confidence weights based on |K| magnitude."""

@@ -132,6 +132,11 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         Two features are visible if the line between them never goes below
         the terrain elevation at any point.
         """
+        
+        if not features:
+            self._log("No features available, visibility network will be empty")
+            return {}
+            
         visibility = {f.feature_id: set() for f in features}
         
         # Extract centroids
@@ -425,6 +430,11 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         """
         Build flow network based on aspect (flow direction).
         """
+        
+        if not features:
+            self._log("No features available, flow network will be empty")
+            return {}, None
+            
         flow_network = {f.feature_id: [] for f in features}
         
         if aspect is None:
@@ -480,6 +490,8 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         
         return flow_network, flow_accumulation
     
+    # ######################
+    
     def _build_connectivity_graph(self, features: List[TerrainFeature],
                                    heightmap: Heightmap,
                                    slope: Optional[np.ndarray]) -> Dict[str, Set[str]]:
@@ -489,6 +501,11 @@ class Layer4_Relational(PipelineLayer[Dict[str, any]]):
         Features are connected if there exists a traversable path between them
         respecting the vehicle's slope limits.
         """
+        
+        if not features:
+            self._log("No features available, connectivity network will be empty")
+            return {}
+        
         connectivity = {f.feature_id: set() for f in features}
         
         # If no slope, use simple distance-based connectivity

@@ -134,8 +134,9 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         """
         Return (h_epsilon, k_epsilon) — independent thresholds for H and K.
         """
+        
         if self.adaptive_epsilon:
-            self._debug("Using adaptive epsilon (75th percentile)")
+            self._debug(f"Using adaptive epsilon [{self.config.adaptive_percentile} percentile]")
             return self._compute_adaptive_epsilon(H, K)
         else:
             eps = float(self.config.curvature_epsilon)
@@ -147,21 +148,20 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         H_valid = H[~np.isnan(H)]
         K_valid = K[~np.isnan(K)]
 
-        # Use 75th percentile instead of 95th.
-        # 95th sits in seam artifacts and extreme peaks, inflating thresholds.
-        # 75th sits in the "feature body" where most terrain signals live.
-        h_anchor = float(np.percentile(np.abs(H_valid), 75))
-        k_anchor = float(np.percentile(np.abs(K_valid), 75))
-
+        # Use n-th percentile (REF: config.adaptive_percentile)
+        h_anchor = float(np.percentile(np.abs(H_valid), self.config.adaptive_percentile))
+        k_anchor = float(np.percentile(np.abs(K_valid), self.config.adaptive_percentile))
+        
         h_epsilon = max(self.config.curvature_epsilon_h_factor * h_anchor,
                         self.config.curvature_epsilon_h_min)
+        
         k_epsilon = max(self.config.curvature_epsilon_k_factor * k_anchor,
                         self.config.curvature_epsilon_k_min)
 
         self._debug(f"Adaptive epsilon | H_anchor={h_anchor:.6f} → H_eps={h_epsilon:.6f}, K_anchor={k_anchor:.6f} → K_eps={k_epsilon:.6f}")
         return h_epsilon, k_epsilon
         
-    def _compute_adaptive_epsilon(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
+    def _compute_adaptive_epsilon_old2(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
         """Compute adaptive thresholds using 75th percentile of NON-FLAT regions only."""
         
         # First, identify potentially non-flat regions using slope or elevation variance
@@ -192,6 +192,46 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         
         self._debug(f"Adaptive epsilon (non-flat regions) | H_anchor={h_anchor:.6f} → H_eps={h_epsilon:.6f}, "
                     f"K_anchor={k_anchor:.6f} → K_eps={k_epsilon:.6f}")
+        return h_epsilon, k_epsilon
+    
+    # changed: over-inflation clamps on K and H
+    def _compute_adaptive_epsilon(self, H: ScalarField, K: ScalarField) -> tuple[float, float]:
+        """Compute adaptive thresholds with both floor AND ceiling."""
+        
+        H_valid = H[~np.isnan(H)]
+        K_valid = K[~np.isnan(K)]
+        
+        # Find non-flat regions
+        H_abs = np.abs(H)
+        H_threshold = np.percentile(H_abs, 50)
+        non_flat_mask = H_abs > H_threshold
+        
+        if np.sum(non_flat_mask) < 100:
+            h_anchor = np.percentile(np.abs(H_valid), 75)
+            k_anchor = np.percentile(np.abs(K_valid), 75)
+        else:
+            h_anchor = np.percentile(H_abs[non_flat_mask], 75)
+            k_anchor = np.percentile(np.abs(K)[non_flat_mask], 75)
+        
+        # Apply factor
+        h_raw = self.config.curvature_epsilon_h_factor * h_anchor
+        k_raw = self.config.curvature_epsilon_k_factor * k_anchor
+        
+        # Clamp between min/max
+        self._debug(f"Epsilon clamp range MIN: H={self.config.curvature_epsilon_h_min}, K={self.config.curvature_epsilon_k_min}")
+        self._debug(f"Epsilon clamp range MAX: H={self.config.curvature_epsilon_h_max}, K={self.config.curvature_epsilon_k_max}")
+        h_epsilon = np.clip(
+            h_raw, 
+            self.config.curvature_epsilon_h_min, 
+            self.config.curvature_epsilon_h_max
+        )
+        k_epsilon = np.clip(
+            k_raw, 
+            self.config.curvature_epsilon_k_min, 
+            self.config.curvature_epsilon_k_max
+        )
+        
+        self._debug(f"Adaptive epsilon is set to H={h_epsilon:.6f}, K={k_epsilon:.6f}")
         return h_epsilon, k_epsilon
         
     def _classify_curvature_old(self, H: ScalarField, K: ScalarField, h_epsilon: float, k_epsilon: float) -> np.ndarray:

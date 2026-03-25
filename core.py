@@ -129,7 +129,7 @@ class PipelineConfig:
     
     horizontal_scale: float = 2.0           # [0.5-10.0] meters per pixel
     vertical_scale: float = 0.2             # [0.05-1.0] meters per grayscale unit
-    sea_level_offset: float = 10.0          # [0-100] meters, base elevation
+    sea_level_offset: float = 0.0          # [0-100] meters, base elevation
     noise_reduction_sigma: float = 2.0      # [0.5-5.0] Gaussian blur strength
     
     # =========================================================================
@@ -145,10 +145,24 @@ class PipelineConfig:
     
     adaptive_epsilon: bool = True               # [True/False] auto-tune thresholds
     curvature_epsilon: float = 0.00001          # [1e-6-1e-3] static fallback (1/m)
-    curvature_epsilon_h_factor: float = 0.6     # [0.3-0.9] multiplier for mean curvature
-    curvature_epsilon_k_factor: float = 0.6     # [0.3-0.9] multiplier for Gaussian curvature
-    curvature_epsilon_h_min: float = 0.0001     # [1e-6-1e-2] minimum mean curvature (1/m)
-    curvature_epsilon_k_min: float = 0.00001    # [1e-7-1e-3] minimum Gaussian curvature (1/m²)
+    curvature_epsilon_h_factor: float = 0.25    # [0.3-0.9] multiplier for mean curvature
+    curvature_epsilon_k_factor: float = 0.35     # [0.3-0.9] multiplier for Gaussian curvature
+    
+    #    Terrain Type    |  adaptive percentile | Rationale
+    # -------------------------------------------------------------------------------------------------------
+    #    Mountainous     |  75-85               | High curvature variance, can afford higher threshold
+    #    Rolling Hills	 |  60-70               | Moderate features, need sensitivity
+    #    Sparse Features |  50-60               | Isolated ridges/valleys on flat terrain (default)
+    #    Urban/Man-made  |  80-90               | Sharp edges dominate, filter out noise
+    adaptive_percentile: float = 45.0
+    
+    # prevent over-deflation
+    curvature_epsilon_h_min: float = 0.00005     # [1e-6-1e-2] minimum mean curvature (1/m)
+    curvature_epsilon_k_min: float = 0.000005    # [1e-7-1e-3] minimum Gaussian curvature (1/m²)
+    
+    # prevent over-inflation
+    curvature_epsilon_h_max: float = 0.05       # [0.01-0.2] maximum mean curvature threshold (1/m)
+    curvature_epsilon_k_max: float = 0.001      # [0.0001-0.01] maximum Gaussian curvature threshold (1/m²)
     
     # =========================================================================
     # LAYER 3: TOPOLOGY - Feature Detection
@@ -173,7 +187,11 @@ class PipelineConfig:
     # --- Saddles (passes between peaks) ---
     saddle_k_min_threshold: float = 0.00020     # [1e-6-1e-2] minimum |K| for saddle (1/m²)
     saddle_confidence_threshold: float = 1.0    # [0.0-1.0] normalized confidence (1.0 = all)
-    
+
+    # --- Sea Level ---
+    exclude_below_reference: bool = True        # [True/False] exclude sea domain features
+    elevation_reference_m: float = 8.0         # meters
+        
     # --- General Topology ---
     border_margin_px: int = 10                  # [5-30] pixels, ignore edges
     prominence_search_radius_m: float = 100.0   # [50-500] meters, search radius for prominence
@@ -183,28 +201,28 @@ class PipelineConfig:
     # =========================================================================
     
     # --- Visibility ---
-    visibility_max_range_m: float = 1000.0      # [200-3000] meters, max line-of-sight distance
-    viewshed_sample_step_px: int = 10            # [2-10] pixels, step size for ray casting (performance)
+    visibility_max_range_m: float = 1200.0      # [200-3000] meters, max line-of-sight distance
+    viewshed_sample_step_px: int = 16            # [1-50] pixels, step size for ray casting (performance)
     visibility_sample_radius: int = 5           # [3-15] pixels, sampling radius for viewshed
     
     # --- Flow Network ---
-    flow_step_px: int = 10                      # [5-20] pixels, step size for flow accumulation
-    flow_neighbor_distance_px: int = 50         # [20-100] pixels, max distance to downstream feature
+    flow_step_px: int = 5                      # [5-20] pixels, step size for flow accumulation
+    flow_neighbor_distance_px: int = 80         # [20-100] pixels, max distance to downstream feature
     
     # --- Connectivity ---
-    connection_radius_m: float = 50.0          # [50-500] meters, feature connection radius
-    vehicle_climb_angle: float = 30.0           # [20-45] degrees, max slope for vehicles
+    connection_radius_m: float = 75.0          # [50-500] meters, feature connection radius
+    vehicle_climb_angle: float = 25.0           # [20-45] degrees, max slope for vehicles
     cliff_threshold_degrees: float = 45.0       # [30-60] degrees, impassable terrain
     
     # --- Watersheds ---
-    watershed_min_area_m2: float = 1000.0       # [500-10000] m², minimum watershed area
-    watershed_sample_step_px: int = 20          # [5-20] pixels, step size for watershed delineation
+    watershed_min_area_m2: float = 150.0       # [500-10000] m², minimum watershed area
+    watershed_sample_step_px: int = 10          # [5-20] pixels, step size for watershed delineation
     
     # =========================================================================
     # LAYER 5: SEMANTICS - Domain Interpretation
     # =========================================================================
     
-    game_type: GameType = GameType.ARMA_3       # [ARMA_2/ARMA_3/WAR_THUNDER/WORLD_OF_TANKS/CUSTOM]
+    game_type: GameType = GameType.CUSTOM       # [ARMA_2/ARMA_3/WAR_THUNDER/WORLD_OF_TANKS/CUSTOM]
     
     # --- Defensive Positions ---
     defensive_min_prominence_m: float = 8.0     # [5-30] meters, minimum height advantage
