@@ -428,6 +428,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 flat.metadata['defensive_coverage'] = len(nearby_defensive)
                 self._log(f"assembly areas: capacity={_acap}m2, coverage={len(nearby_defensive)}")
             else:
+                _acap = area_m2 / self.config.assembly_capacity_divisor
                 tags.append("small_clearing")
                 self._log(f"assembly areas: capacity={_acap}m2, small clearing")
             

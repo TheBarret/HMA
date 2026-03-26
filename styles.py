@@ -44,7 +44,7 @@ class BaseVisualizer(ABC):
         pass
     
     # =========================================================================
-    # Overlay System (Optional - does not break existing visualizers)
+    # Overlay System
     # =========================================================================
     
     def _dispatch_overlays(self, ax: plt.Axes, data: Dict) -> None:
@@ -53,19 +53,23 @@ class BaseVisualizer(ABC):
         This is safe to call from plot() without breaking existing visualizers.
         """
         if hasattr(self, '_plot_strategic'):
-            self._plot_strategic(ax, data)
+            #self._plot_strategic(ax, data)
+            pass
         
         if hasattr(self, '_plot_tactical'):
             self._plot_tactical(ax, data)
         
         if hasattr(self, '_plot_logistical'):
-            self._plot_logistical(ax, data)
+            #self._plot_logistical(ax, data)
+            pass
         
         if hasattr(self, '_plot_hydro'):
-            self._plot_hydro(ax, data)
+            #self._plot_hydro(ax, data)
+            pass
         
         if hasattr(self, '_plot_quality'):
-            self._plot_quality(ax, data)
+            #self._plot_quality(ax, data)
+            pass
     
     # =========================================================================
     # Helper methods (available to all visualizers)
