@@ -8,7 +8,6 @@ Computes first derivatives from calibrated heightmap:
 
 import numpy as np
 from typing import Dict
-import warnings
 
 from core import Heightmap, ScalarField, PipelineConfig, PipelineLayer
 
@@ -146,8 +145,10 @@ class Layer1_LocalGeometry(PipelineLayer[Dict[str, ScalarField]]):
             }
         }
 
+# -----------------------------------------------------
+# Sobel-based implementation for better noise immunity
+# -----------------------------------------------------
 
-# Optional: Sobel-based implementation for better noise immunity
 class Layer1_LocalGeometry_Sobel(Layer1_LocalGeometry):
     """
     Alternative implementation using Sobel operators.
@@ -176,9 +177,7 @@ class Layer1_LocalGeometry_Sobel(Layer1_LocalGeometry):
         slope_rad = np.arctan(np.sqrt(dz_dx**2 + dz_dy**2))
         slope_deg = np.degrees(slope_rad)
 
-        # Correct arctan2: negate only dz_dx for downhill GIS convention
-        #aspect_rad = np.arctan2(-dz_dx, dz_dy)
-        #aspect_rad = (aspect_rad + 2 * np.pi) % (2 * np.pi)
+        # Arctan2: negate only dz_dx for downhill GIS convention
         aspect_rad = np.arctan2(dz_dx, -dz_dy)
         aspect_rad = (aspect_rad + 2 * np.pi) % (2 * np.pi)
 

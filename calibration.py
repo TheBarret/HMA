@@ -5,7 +5,6 @@ Layer 0: Calibration Module
 import numpy as np
 from scipy import ndimage
 from typing import Optional, Callable, Tuple
-from dataclasses import dataclass
 
 from core import (
     Heightmap, 
@@ -14,8 +13,7 @@ from core import (
     PixelCoord, 
     WorldCoord,
     PipelineConfig,
-    ScalarField,
-    AffineTransform
+    ScalarField
 )
 
 class Layer0_Calibration:
@@ -38,7 +36,7 @@ class Layer0_Calibration:
     
     def execute(
             self, 
-            input_data,  # 'RawImageInput'-> any to allow flexibility
+            input_data,  # 'RawImageInput', 'np.ndarray'
             normalization_config: Optional[NormalizationConfig] = None,
             georeferencing: Optional[dict] = None
         ) -> Heightmap:
@@ -123,22 +121,15 @@ class Layer0_Calibration:
         if input_data.metadata:
             if 'horizontal_scale' in input_data.metadata:
                 h_scale = input_data.metadata['horizontal_scale']
-                v_scale = input_data.metadata.get('vertical_scale', 0.1)  # Default 10cm per unit
-                offset = input_data.metadata.get('sea_level_offset', 0.0)
+                v_scale = input_data.metadata.get('vertical_scale', self.config.vertical_scale)
+                offset  = input_data.metadata.get('sea_level_offset', self.config.sea_level_offset)
                 return NormalizationConfig(h_scale, v_scale, offset)
-        
-        _cf = NormalizationConfig(
-            horizontal_scale=self.config.horizontal_scale,
-            vertical_scale=self.config.vertical_scale,
-            sea_level_offset=self.config.sea_level_offset
-        )
-        # Heuristic defaults based on typical DEM data
-        # In real applications, you'd want explicit calibration
-        if self.config.verbose:
-            print("[Calibration] No calibration metadata, using heuristic defaults")
-            print(f" └─ horizontal_scale: {_cf.horizontal_scale}, horizontal_scale={_cf.horizontal_scale}, sea_level_offset={_cf.sea_level_offset}")
-        
-        return _cf
+
+        return NormalizationConfig(
+                    horizontal_scale=self.config.horizontal_scale,
+                    vertical_scale=self.config.vertical_scale,
+                    sea_level_offset=self.config.sea_level_offset
+                )
         
     def _normalize_elevation(
         self, 
@@ -239,15 +230,15 @@ class Layer0_Calibration:
         if np.any(np.isinf(elevation_data)):
             raise ValueError("Infinite values detected in calibrated surface")
         
-        # Warn about extreme elevation ranges
+        # warn about extreme elevation ranges
         elevation_range = elevation_data.max() - elevation_data.min()
-        if elevation_range > 10000:  # 10km range
+        if elevation_range > self.config.max_elevation_range:  
             if self.config.verbose:
                 print(f"[Calibration] Extreme elevation range: {elevation_range:.1f}m")
         
         # Check for artificial steps
         # This could indicate poor calibration or quantization artifacts
-        hist, bin_edges = np.histogram(elevation_data, bins=50)
+        hist, bin_edges = np.histogram(elevation_data, bins=self.config.histogram_bins)
         
         if np.max(hist) > 0.9 * len(elevation_data.flat):
             if elevation_range < 0.01:
@@ -312,13 +303,12 @@ class Layer0_Calibration_With_QualityMetrics(Layer0_Calibration):
         This is a simple estimator that works for natural terrain.
         """
         # High-pass filter using Laplacian
-        from scipy import ndimage
         high_pass = ndimage.laplace(elevation_data)
         
         # Robust estimate of scale (MAD)
         mad = np.median(np.abs(high_pass - np.median(high_pass)))
         
         # Convert to standard deviation assuming Gaussian noise
-        noise_std = mad / 0.6745
+        noise_std = mad / self.config.std_gaussian
         
         return float(noise_std)

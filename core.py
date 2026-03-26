@@ -6,7 +6,7 @@ from typing import Dict, Any
 from typing import Optional
 from typing import List, Set
 from abc import ABC, abstractmethod
-from typing import Callable, Generic, TypeVar, Protocol
+from typing import Callable, Generic, TypeVar
 from dataclasses import dataclass, field, KW_ONLY
 from uuid import uuid4
 
@@ -57,8 +57,7 @@ class Traversability(Enum):
 
 
 # Template Profiles
-class GameType(Enum):
-    """Supported game types for automatic scaling"""
+class Template(Enum):
     ARMA_2 = "ARMA_2"                   # Typical: 1-5m resolution
     ARMA_3 = "ARMA_3"                   # Typical: 1-10m resolution  
     WORLD_OF_TANKS = "WORLD OF TANKS"   # Vehicle-focused, 1-2m resolution
@@ -66,54 +65,53 @@ class GameType(Enum):
     CUSTOM = "CUSTOM"
 
 @dataclass
-class GameScaling:
-    """Game-specific scaling presets"""
-    game_type: GameType
+class TScaling:
+    baseline: Template
     horizontal_scale_m_per_px: float
     vertical_scale_m_per_unit: float
     vehicle_climb_angle_deg: float
     infantry_climb_angle_deg: float
     
     @classmethod
-    def for_game(cls, game: GameType) -> 'GameScaling':
+    def for_template(cls, _t: Template) -> 'TScaling':
         presets = {
-            GameType.ARMA_3: cls(
-                game_type=game,
+            Template.ARMA_3: cls(
+                baseline=_t,
                 horizontal_scale_m_per_px=2.0,    # ArmA maps: 2-5m typical
                 vertical_scale_m_per_unit=0.2,    # 0.2m per grayscale unit
                 vehicle_climb_angle_deg=30.0,     # ArmA vehicles
                 infantry_climb_angle_deg=45.0     # Infantry can climb steeper
             ),
-            GameType.WORLD_OF_TANKS: cls(
-                game_type=game,
+            Template.WORLD_OF_TANKS: cls(
+                baseline=_t,
                 horizontal_scale_m_per_px=1.0,    # WoT: detailed 1m resolution
                 vertical_scale_m_per_unit=0.1,    # 0.1m precision
                 vehicle_climb_angle_deg=25.0,     # Tanks have limits
                 infantry_climb_angle_deg=45.0
             ),
-            GameType.WAR_THUNDER: cls(
-                game_type=game,
+            Template.WAR_THUNDER: cls(
+                baseline=_t,
                 horizontal_scale_m_per_px=1.5,    # Mixed resolution
                 vertical_scale_m_per_unit=0.15,
                 vehicle_climb_angle_deg=30.0,
                 infantry_climb_angle_deg=45.0
             ),
-            GameType.ARMA_2: cls(
-                game_type=game,
+            Template.ARMA_2: cls(
+                baseline=_t,
                 horizontal_scale_m_per_px=5.0,    # Older maps larger scale
                 vertical_scale_m_per_unit=0.25,
                 vehicle_climb_angle_deg=25.0,
                 infantry_climb_angle_deg=45.0
             ),
-            GameType.CUSTOM: cls(
-                game_type=game,
+            Template.CUSTOM: cls(
+                baseline=_t,
                 horizontal_scale_m_per_px=2.0,    # Custom
                 vertical_scale_m_per_unit=0.25,
                 vehicle_climb_angle_deg=25.0,
                 infantry_climb_angle_deg=45.0
             )
         }
-        return presets.get(game, presets[GameType.ARMA_3])
+        return presets.get(_t, presets[Template.ARMA_3])
 
 # =========================================================================
 #  MASTER PIPELINE CONFIG
@@ -131,6 +129,10 @@ class PipelineConfig:
     vertical_scale: float = 0.2             # [0.05-1.0] meters per grayscale unit
     sea_level_offset: float = 0.0          # [0-100] meters, base elevation
     noise_reduction_sigma: float = 2.0      # [0.5-5.0] Gaussian blur strength
+    max_elevation_range: int = 10000        # max elevation bounds [10km range]
+    histogram_bins: int = 50                # histogram quantizing pool
+    std_gaussian: float = 0.6745            # stddev conversion factor for a Gaussian [0.6745]
+    
     
     # =========================================================================
     # LAYER 1: LOCAL GEOMETRY - Slope & Aspect
@@ -175,6 +177,7 @@ class PipelineConfig:
     peak_shoulder_convex_ratio: float = 0.05    # [0.01-0.3] convex pixels in annular ring
     peak_annular_inner_m: float = 5.0           # [2-15] meters, inner shoulder radius
     peak_annular_outer_m: float = 12.0          # [5-25] meters, outer shoulder radius
+    peak_smooth_sigma: float = 1.5              # ndimage.gaussian_filter(z, sigma)
     
     # --- Ridges & Valleys (linear features) ---
     min_ridge_length_px: int = 10                # [3-20] pixels, minimum ridge length
@@ -202,12 +205,12 @@ class PipelineConfig:
     
     # --- Visibility ---
     visibility_max_range_m: float = 1200.0      # [200-3000] meters, max line-of-sight distance
-    viewshed_sample_step_px: int = 16            # [1-50] pixels, step size for ray casting (performance)
+    viewshed_sample_step_px: int = 8            # [1-50] pixels, step size for ray casting (performance)
     visibility_sample_radius: int = 5           # [3-15] pixels, sampling radius for viewshed
     
     # --- Flow Network ---
-    flow_step_px: int = 5                      # [5-20] pixels, step size for flow accumulation
-    flow_neighbor_distance_px: int = 80         # [20-100] pixels, max distance to downstream feature
+    flow_step_px: int = 10                      # [5-20] pixels, step size for flow accumulation
+    flow_neighbor_distance_px: int = 50         # [20-100] pixels, max distance to downstream feature
     
     # --- Connectivity ---
     connection_radius_m: float = 75.0          # [50-500] meters, feature connection radius
@@ -222,7 +225,7 @@ class PipelineConfig:
     # LAYER 5: SEMANTICS
     # =========================================================================
     
-    game_type: GameType = GameType.ARMA_3       # [ARMA_2/ARMA_3/WAR_THUNDER/WORLD_OF_TANKS/CUSTOM]
+    baseline: Template = Template.ARMA_3       # [ARMA_2/ARMA_3/WAR_THUNDER/WORLD_OF_TANKS/CUSTOM]
     max_feature_coverage: float = 0.5           # Max 50% of map for any single feature
     
     # --- Defensive Positions ---
@@ -233,8 +236,7 @@ class PipelineConfig:
     saddle_elevation_high: float = 30.0         # saddle elevation high [m]
     saddle_elevation_low: float = 10.0          # saddle elevation low [m]
     valley_avg_slope: float = 15.0              # valley avg slope [m]
-    
-    
+        
     defensive_min_prominence_m: float = 8.0     # [5-30] meters, minimum height advantage
     defensive_min_elevation_m: float = 5.0      # [2-20] meters, minimum absolute height
     defensive_max_slope_deg: float = 25.0       # [15-35] degrees, max slope for defense
@@ -251,17 +253,6 @@ class PipelineConfig:
     # --- Chokepoints ---
     chokepoint_min_connectivity: int = 2        # [2-5] minimum connections to be chokepoint
     cover_min_width_m: float = 5.0              # [2-15] meters, minimum cover width
-    
-    
-    # =========================================================================
-    # ADDITIONAL FIELDS - Movement & Terrain Classification
-    # =========================================================================
-    
-    cliff_threshold_degrees: float = 45.0       # [30-60] degrees, impassable slope
-    gentle_slope_threshold_degrees: float = 15.0  # [10-25] degrees, easy traversal
-    vehicle_climb_angle: float = 30.0           # [20-45] degrees, vehicle limit
-    visibility_sample_radius: int = 8           # [3-15] pixels, viewshed sampling radius
-    
     analysis_scales: Dict[str, int] = field(default_factory=lambda: {
         "micro": 3,     # [1-5] pixels, noise/small rocks
         "meso": 15,     # [10-30] pixels, gullies/ridges
@@ -273,7 +264,9 @@ class PipelineConfig:
     # =========================================================================
     
     verbose: bool = True                        # [True/False] enable debug logging
-    save_intermediates: bool = False            # [True/False] save intermediate files
+    
+    # FUTURE UPDATE SEE PROPOSAL: CACHE AWARE PIPELINE (CACHE.PY
+    save_intermediates: bool = False            # [True/False] save intermediate files 
     
     # =========================================================================
     # Extensions
@@ -312,7 +305,7 @@ class RawImageInput:
     
     def validate(self) -> bool:
         """Validate input data format."""
-        # Explicitly convert all checks to Python bool (not numpy.bool_)
+        # explicitly convert all checks to Python bool (not numpy.bool_)
         if not isinstance(self.data, np.ndarray):
             return False
         if int(self.data.ndim) != 2:
@@ -320,7 +313,7 @@ class RawImageInput:
         if self.data.dtype != np.uint8:
             return False
         if not bool(np.isfinite(self.data).all()):
-            return False  # Additional: check for NaN/Inf
+            return False
         return True
 
 @dataclass(frozen=True)
@@ -444,7 +437,7 @@ class PeakFeature(ClassifiedFeature):
     prominence: float
     visibility_radius: Optional[float] = None
     _avg_slope: float = field(default=15.0, init=False)  # Store internally
-
+    
     @property
     def curvature_type(self) -> CurvatureType:
         return CurvatureType.CONVEX
@@ -472,7 +465,7 @@ class RidgeFeature(ClassifiedFeature):
     def curvature_type(self) -> CurvatureType:
         return CurvatureType.CONVEX
    
-    def is_traversable(self, config: PipelineConfig) -> Traversability:  # Add this
+    def is_traversable(self, config: PipelineConfig) -> Traversability:
         return config.is_traversable(self.avg_slope)
     
     def contains_point(self, pixel: PixelCoord) -> bool:
@@ -503,10 +496,12 @@ class ValleyFeature(ClassifiedFeature):
         return float(self.metadata.get('avg_slope', 10.0))
     
     def is_traversable(self, config: 'PipelineConfig') -> Traversability:
-        # Valleys are often wet/difficult, so add penalty
+        # Valley Traversability Reasoning:
+        # - Valleys if conditioned wet OR difficult => penalty
+        # - Valleys default to difficult
         base = config.is_traversable(self.avg_slope)
         if base == Traversability.FREE:
-            return Traversability.DIFFICULT  # Valleys default to difficult
+            return Traversability.DIFFICULT  
         return base
     
     def contains_point(self, pixel: PixelCoord) -> bool:
@@ -576,74 +571,6 @@ class FlatZoneFeature(ClassifiedFeature):
         x_min, x_max, y_min, y_max = self.metadata['bounds']
         return x_min <= x <= x_max and y_min <= y <= y_max
 
-class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
-    """
-    Build relational graphs from discrete features.
-
-    Requires the full bundle from all prior layers — features alone are insufficient:
-      - features:       discrete objects from Layer 3 (nodes in every graph)
-      - heightmap:      elevation surface for line-of-sight ray casting (viewshed)
-      - slope/aspect:   flow direction is re-derived from aspect, not from features
-      - curvature:      watershed boundary seeds follow ridge lines (positive curvature)
-
-    Output is graph-structured, not scalar fields: visibility, flow, and connectivity
-    are all relations between features, not per-pixel values.
-    """
-
-    def execute(self, input_data: LayerBundle) -> Dict[str, Any]:
-        # input_data keys: "features", "heightmap", "slope", "aspect", "curvature"
-        # Output:
-        #   "visibility_graph":    Dict[str, Set[str]]   — feature_id → set of visible feature_ids
-        #   "flow_network":        Dict[str, List[str]]  — feature_id → ordered downstream feature_ids
-        #   "connectivity_graph":  Dict[str, Set[str]]   — feature_id → adjacent traversable feature_ids
-        #   "watersheds":          Dict[str, Set[str]]   — basin_id → set of member feature_ids
-        #   "flow_accumulation":   ScalarField           — per-pixel accumulated upstream area
-        pass
-
-    @property
-    def output_schema(self) -> dict:
-        return {
-            "visibility_graph":   {"type": "Dict[str, Set[str]]",  "description": "feature_id → visible feature_ids"},
-            "flow_network":       {"type": "Dict[str, List[str]]", "description": "feature_id → downstream feature_ids"},
-            "connectivity_graph": {"type": "Dict[str, Set[str]]",  "description": "feature_id → traversable neighbours"},
-            "watersheds":         {"type": "Dict[str, Set[str]]",  "description": "basin_id → member feature_ids"},
-            "flow_accumulation":  {"type": "ScalarField",          "description": "per-pixel upstream area in pixels²"},
-        }
-
-
-class Layer5_Semantics(PipelineLayer["AnalyzedTerrain"]):
-    """
-    Assemble all prior outputs into the final AnalyzedTerrain object.
-
-    This layer applies domain thresholds and classification rules to produce
-    human-meaningful terrain categories. It is the only layer allowed to
-    construct AnalyzedTerrain — all previous layers remain domain-agnostic.
-
-    Requires the full bundle from all prior layers:
-      - features:            discrete objects for population into typed lists
-      - visibility_graph,
-        flow_network,
-        connectivity_graph,
-        watersheds,
-        flow_accumulation:   relational outputs from Layer 4
-      - heightmap:           retained as source reference in AnalyzedTerrain
-    """
-
-    def execute(self, input_data: LayerBundle) -> "AnalyzedTerrain":
-        # input_data keys: all Layer 3 + Layer 4 outputs, plus "heightmap"
-        # Output: fully populated AnalyzedTerrain instance
-        pass
-
-    @property
-    def output_schema(self) -> dict:
-        return {
-            "type": "AnalyzedTerrain",
-            "fields": [
-                "source_heightmap", "peaks", "valleys", "ridges", "saddles", "flat_zones",
-                "visibility_graph", "flow_network", "connectivity_graph",
-                "watersheds", "flow_accumulation",
-            ]
-        }
 
 #
 #  The Dependency Chain Executor
@@ -750,30 +677,3 @@ class AnalyzedTerrain:
         """
         pass
         
-@dataclass(frozen=True)
-class ScaledTransform:
-    """Serializable pixel → world coordinate transform."""
-    scale: float
-    offset_x: float = 0.0
-    offset_y: float = 0.0
-
-    def __call__(self, pixel: PixelCoord) -> WorldCoord:
-        return (pixel[0] * self.scale + self.offset_x,
-                pixel[1] * self.scale + self.offset_y)
-                
-
-@dataclass(frozen=True)
-class AffineTransform:
-    """
-    Serializable pixel → world coordinate transform (full affine, 6-parameter).
-    Replaces the affine lambda closure which cannot be pickled or saved to disk.
-    Parameters match the [a b tx; c d ty] convention.
-    """
-    a: float; b: float; tx: float
-    c: float; d: float; ty: float
-
-    def __call__(self, pixel) -> tuple:
-        x, y = pixel
-        return (self.a * x + self.b * y + self.tx,
-                self.c * x + self.d * y + self.ty)
-                
