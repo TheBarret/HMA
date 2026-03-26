@@ -292,8 +292,21 @@ class PipelineConfig:
     # =========================================================================
     
     verbose: bool = True                        # [True/False] enable debug logging
+   
+    # visualizer settings
+    visualization_style: str = "gis"           # "gis", "game", "military", "orienteering"
+    visualization_dpi: int = 150               # [72-300] output resolution
+    visualization_show_grid: bool = True       # [True/False] show coordinate grid
+    visualization_show_legend: bool = True     # [True/False] show legend
+    visualization_base_alpha: float = 0.7      # [0.3-1.0] base terrain transparency
     
-    # FUTURE UPDATE SEE PROPOSAL: CACHE AWARE PIPELINE (CACHE.PY
+    # Overlays: "strategic", "tactical", "logistical", "hydro", "quality", "all", "none"
+    visualization_overlays: List[str] = field(default_factory=lambda: ["strategic"]) 
+
+    # GIS-specific
+    gis_show_elevation_tint: bool = True       # [True/False] add elevation color tint
+    
+    # To be implemented
     save_intermediates: bool = False            # [True/False] save intermediate files 
     
     # =========================================================================
