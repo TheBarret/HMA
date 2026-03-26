@@ -8,16 +8,14 @@ tactical terrain categories for combat games (Arma, WoT, War Thunder).
 
 import numpy as np
 from typing import Dict, List, Set, Optional, Tuple, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from collections import defaultdict
-import warnings
 
 from core import (
     Heightmap, ScalarField, PipelineConfig, PipelineLayer,
     TerrainFeature, ClassifiedFeature,
     PeakFeature, RidgeFeature, ValleyFeature, SaddleFeature, FlatZoneFeature,
-    Traversability, CurvatureType, AnalyzedTerrain, LayerBundle,
-    PixelCoord, WorldCoord, GameType
+    AnalyzedTerrain, LayerBundle, PixelCoord, WorldCoord, Template
 )
 
 
@@ -34,12 +32,16 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
     - Vehicle routes (traversable corridors)
     """
     
-    def __init__(self, config: PipelineConfig, game_type: GameType = None):
+    def __init__(self, config: PipelineConfig):
         super().__init__(config)
-        self.game_type = config.game_type
+        self.baseline = config.baseline
+        
+        # internal storage
+        self.max_feature_area: float = 0.0
+        self.total_area_m2: float = 0.0
         
         # Template thresholds
-        self._log(f'using template: {self.game_type}')
+        self._log(f'using template: {self.baseline}')
         self._template_thresholds = self._get_template_thresholds()
         
         # Coverage filtering
@@ -54,7 +56,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
     def _get_template_thresholds(self) -> Dict[str, Any]:
         """Get game-specific tactical thresholds."""
         thresholds = {
-            GameType.ARMA_3: {
+            Template.ARMA_3: {
                 "defensive_min_prominence_m": 8.0,
                 "defensive_min_elevation_m": 5.0,
                 "defensive_max_slope_deg": 25.0,
@@ -67,7 +69,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 "cover_min_width_m": 5.0,
                 "vehicle_route_max_slope_deg": 25.0,
             },
-            GameType.WORLD_OF_TANKS: {
+            Template.WORLD_OF_TANKS: {
                 "defensive_min_prominence_m": 5.0,
                 "defensive_min_elevation_m": 3.0,
                 "defensive_max_slope_deg": 20.0,
@@ -80,7 +82,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 "cover_min_width_m": 4.0,
                 "vehicle_route_max_slope_deg": 20.0,
             },
-            GameType.WAR_THUNDER: {
+            Template.WAR_THUNDER: {
                 "defensive_min_prominence_m": 6.0,
                 "defensive_min_elevation_m": 4.0,
                 "defensive_max_slope_deg": 25.0,
@@ -93,7 +95,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 "cover_min_width_m": 5.0,
                 "vehicle_route_max_slope_deg": 25.0,
             },
-            GameType.ARMA_2: {
+            Template.ARMA_2: {
                 "defensive_min_prominence_m": 10.0,
                 "defensive_min_elevation_m": 6.0,
                 "defensive_max_slope_deg": 25.0,
@@ -107,7 +109,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 "vehicle_route_max_slope_deg": 25.0,
             },
         }
-        return thresholds.get(self.game_type, thresholds[GameType.ARMA_3])
+        return thresholds.get(self.baseline, thresholds[Template.ARMA_3])
     
     def execute(self, input_data: LayerBundle) -> AnalyzedTerrain:
         """
@@ -162,7 +164,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         # Apply semantic classification with game-specific thresholds
         self._classify_features_semantically(
             peaks, ridges, valleys, saddles, flat_zones,
-            heightmap, slope, visibility, connectivity
+            heightmap, slope, visibility, connectivity, flow_network
         )
         
         # Build semantic index for tactical queries
@@ -193,25 +195,49 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         return analyzed
     
     def _classify_features_semantically(self, peaks: List, ridges: List,
-                                         valleys: List, saddles: List,
-                                         flat_zones: List, heightmap: Heightmap,
-                                         slope: Optional[np.ndarray],
-                                         visibility: Dict,
-                                         connectivity: Dict) -> None:
+                                     valleys: List, saddles: List,
+                                     flat_zones: List, heightmap: Heightmap,
+                                     slope: Optional[np.ndarray],
+                                     visibility: Dict,
+                                     connectivity: Dict,
+                                     flow_network: Dict) -> None:
         """
         Add semantic tags to features based on game-specific thresholds.
+        
+        Uses relational graphs (visibility, connectivity, flow_network) to classify
+        features according to the foundation document: Layer 5 consumes the graphs
+        built by Layer 4 to produce tactical meaning.
         """
         cell_size = heightmap.config.horizontal_scale
-        total_area_m2 = heightmap.shape[0] * heightmap.shape[1] * (cell_size ** 2)
-        max_feature_area = total_area_m2 * self._max_feature_coverage
+        
+        
         thresholds = self._template_thresholds
+        
+        # store bounds + offset
+        self.total_area_m2 = heightmap.shape[0] * heightmap.shape[1] * (cell_size ** 2)
+        self.max_feature_area = self.total_area_m2 * self._max_feature_coverage
+        
+        
+        # Build feature type map for efficient lookups
+        feature_type_map = {}
+        for f in peaks + ridges + valleys + saddles + flat_zones:
+            if isinstance(f, PeakFeature):
+                feature_type_map[f.feature_id] = 'peak'
+            elif isinstance(f, RidgeFeature):
+                feature_type_map[f.feature_id] = 'ridge'
+            elif isinstance(f, ValleyFeature):
+                feature_type_map[f.feature_id] = 'valley'
+            elif isinstance(f, SaddleFeature):
+                feature_type_map[f.feature_id] = 'saddle'
+            elif isinstance(f, FlatZoneFeature):
+                feature_type_map[f.feature_id] = 'flat'
         
         # --- Classify Peaks (Defensive Positions + Observation Posts) ---
         for peak in peaks:
             tags = []
             visible_count = len(visibility.get(peak.feature_id, []))
             
-            # Defensive position scoring
+            # Defensive position scoring (requires visibility from peak)
             if (peak.prominence >= thresholds["defensive_min_prominence_m"] and
                 peak.elevation_range[1] >= thresholds["defensive_min_elevation_m"] and
                 peak.avg_slope <= thresholds["defensive_max_slope_deg"] and
@@ -219,15 +245,17 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 
                 tags.append("defensive_position")
                 # Score based on prominence and visibility
-                defensive_score = min(1.0, (peak.prominence / 20.0) * (visible_count / 10.0))
+                defensive_score = min(1.0, (peak.prominence / self.config.defensive_prominence_divisor) * 
+                                           (visible_count / self.config.defensive_visibility_divisor)
+                                      )
                 peak.metadata['defensive_score'] = defensive_score
             
-            # Observation post (high visibility)
+            # Observation post (requires high visibility from peak)
             if (peak.prominence >= thresholds["observation_min_prominence_m"] and
                 visible_count >= thresholds["observation_min_visibility"]):
                 tags.append("observation_post")
                 peak.metadata['visibility_count'] = visible_count
-                peak.metadata['observation_score'] = min(1.0, visible_count / 15.0)
+                peak.metadata['observation_score'] = min(1.0, visible_count / self.config.observation_visibility_divisor)
             
             # Major/Minor classification
             if peak.prominence > self.config.threshold_major_peak:
@@ -240,22 +268,29 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             peak.metadata['semantic_tags'] = tags
         
         # --- Classify Ridges (Cover Positions) ---
+        # Ridges provide cover based on width and connection to defensive peaks
         for ridge in ridges:
             tags = []
             width = ridge.metadata.get('width_meters', 0)
             
             if width >= thresholds["cover_min_width_m"]:
                 tags.append("defensive_cover")
-                ridge.metadata['cover_quality'] = min(1.0, width / 10.0)
+                ridge.metadata['cover_quality'] = min(1.0, width / self.config.cover_quality_width_divisor)
             else:
                 tags.append("exposed_crest")
             
-            # Tactical significance based on connected peaks
-            if len(ridge.connected_peaks) > 1:
+            # Tactical significance based on connectivity graph
+            connected_to = connectivity.get(ridge.feature_id, set())
+            connected_peaks = [cid for cid in connected_to 
+                              if feature_type_map.get(cid) == 'peak']
+            
+            if len(connected_peaks) > 1:
                 tags.append("ridge_line")
                 ridge.metadata['tactical_significance'] = "high"
-            else:
+            elif len(connected_peaks) == 1:
                 ridge.metadata['tactical_significance'] = "medium"
+            else:
+                ridge.metadata['tactical_significance'] = "low"
             
             ridge.metadata['semantic_tags'] = tags
         
@@ -263,34 +298,77 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         for valley in valleys:
             tags = []
             
-            # Drainage significance
-            if valley.drainage_area and valley.drainage_area > 10000:
+            # Drainage significance from flow network
+            # Count how many features flow into this valley
+            upstream_features = []
+            for src_id, targets in flow_network.items():
+                if valley.feature_id in targets:
+                    upstream_features.append(src_id)
+            
+            upstream_count = len(upstream_features)
+            if upstream_count > self.config.drainage_major_threshold:  # High flow
                 tags.append("major_drainage")
-            elif valley.drainage_area and valley.drainage_area > 1000:
+                valley.metadata['drainage_magnitude'] = upstream_count
+            elif upstream_count > self.config.drainage_minor_threshold: # low flow
                 tags.append("minor_drainage")
-            else:
+                valley.metadata['drainage_magnitude'] = upstream_count
+            else:                                                       # default to gully 
                 tags.append("gully")
             
-            # Ambush potential (narrow valleys with steep sides)
+            # Ambush potential: narrow valleys with steep sides
+            # Use connectivity graph to find adjacent steep ridges
+            connected_to = connectivity.get(valley.feature_id, set())
+            adjacent_ridges = [cid for cid in connected_to 
+                              if feature_type_map.get(cid) == 'ridge']
+            
             avg_slope = valley.metadata.get('avg_slope', 10.0)
-            if avg_slope > self.config.valley_avg_slope:
+            # Ambush requires both steep slopes and constricting terrain (adjacent ridges)
+            if avg_slope > self.config.valley_avg_slope and len(adjacent_ridges) >= 2:
                 tags.append("ambush_potential")
-                valley.metadata['ambush_rating'] = min(1.0, avg_slope / 30.0)
+                valley.metadata['ambush_rating'] = min(1.0, (avg_slope / self.config.ambush_slope_divisor) * 
+                                                            (len(adjacent_ridges) / self.config.ambush_ridge_divisor)
+                                                       )
+            elif avg_slope > self.config.valley_avg_slope:
+                tags.append("steep_ravine")
+            
             valley.metadata['semantic_tags'] = tags
         
         # --- Classify Saddles (Chokepoints) ---
-        
+        # Chokepoint are two steep ridges + narrow flat valley
+        # Use connectivity graph to count ridges and valleys connected to the saddle
         for saddle in saddles:
             tags = []
-            # Count ridge/valley connections, not traversability edges
-            conn_degree = len(saddle.connecting_ridges) + len(saddle.connecting_valleys)
             
-            if conn_degree >= thresholds["chokepoint_min_connectivity"]:
+            # Get all features connected to this saddle from connectivity graph
+            connected_to = connectivity.get(saddle.feature_id, set())
+            
+            # Count ridges and valleys separately
+            connected_ridges = [cid for cid in connected_to 
+                               if feature_type_map.get(cid) == 'ridge']
+            connected_valleys = [cid for cid in connected_to 
+                                if feature_type_map.get(cid) == 'valley']
+            
+            ridge_count = len(connected_ridges)
+            valley_count = len(connected_valleys)
+            total_connections = ridge_count + valley_count
+            
+            # Chokepoint requires at least 2 ridges (constriction) OR
+            # combination of ridges and valleys that create a natural pass
+            if total_connections >= thresholds["chokepoint_min_connectivity"]:
                 tags.append("chokepoint")
-                saddle.metadata['chokepoint_degree'] = conn_degree
-        
-            # Pass classification
+                saddle.metadata['chokepoint_degree'] = total_connections
+                saddle.metadata['ridge_connections'] = ridge_count
+                saddle.metadata['valley_connections'] = valley_count
+                
+                # Higher tactical value if chokepoint connects multiple ridges
+                if ridge_count >= 2:
+                    saddle.metadata['tactical_value'] = "high"
+                elif ridge_count == 1 and valley_count >= 1:
+                    saddle.metadata['tactical_value'] = "medium"
+                else:
+                    saddle.metadata['tactical_value'] = "low"
             
+            # Pass classification based on elevation
             if saddle.elevation > self.config.saddle_elevation_high:
                 tags.append("high_pass")
             elif saddle.elevation > self.config.saddle_elevation_low:
@@ -306,24 +384,36 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             area_m2 = flat.metadata.get('area_m2', 0)
             max_slope = flat.max_slope
             
-            # Assembly area (large, flat)
+            # Assembly area: large, flat zones suitable for staging
             if (area_m2 >= thresholds["assembly_min_area_m2"] and
                 max_slope <= thresholds["assembly_max_slope_deg"]):
                 
-                if area_m2 > 10000:
+                if area_m2 > self.config.assembly_major_area_threshold_m2:
                     tags.append("major_assembly_area")
                 else:
                     tags.append("assembly_area")
                 
-                flat.metadata['assembly_capacity'] = area_m2 / 100
+                flat.metadata['assembly_capacity'] = area_m2 / self.config.assembly_capacity_divisor
+                
+                # Check connectivity to nearby tactical features
+                # Use the peaks list directly instead of _feature_index
+                connected_to = connectivity.get(flat.feature_id, set())
+                nearby_defensive = []
+                for cid in connected_to:
+                    # Find the feature object to check its tags
+                    for peak in peaks:
+                        if peak.feature_id == cid and 'defensive_position' in peak.metadata.get('semantic_tags', []):
+                            nearby_defensive.append(cid)
+                            break
+                flat.metadata['defensive_coverage'] = len(nearby_defensive)
             else:
                 tags.append("small_clearing")
             
-            # Traversability rating
-            if max_slope < 5:
+            # Traversability rating based on slope
+            if max_slope < self.config.trafficability_ideal_threshold_deg:
                 tags.append("ideal_traffic")
                 flat.metadata['trafficability_rating'] = 1.0
-            elif max_slope < 15:
+            elif max_slope < self.config.trafficability_good_threshold_deg:
                 tags.append("good_traffic")
                 flat.metadata['trafficability_rating'] = 0.8
             else:
@@ -354,6 +444,8 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 'total_valleys': len(valleys),
                 'total_saddles': len(saddles),
                 'total_flat_zones': len(flat_zones),
+                'total_area_m2': self.total_area_m2,
+                'max_feature_coverage_m2': self.max_feature_area,
             }
         }
         
@@ -361,7 +453,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         self._log("building index...")
         
         # --- Defensive Positions ---
-        self._log(" -> Defensive Positions")
+        self._log(f" -> Defensive Positions [{len(peaks)}]")
         for peak in peaks:
             # safe metadata access with default empty list
             tags = peak.metadata.get('semantic_tags', [])
@@ -380,7 +472,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 })
         
         # --- Observation Posts ---
-        self._log(" -> Observation Positions")
+        self._log(f" -> Observation Positions [{len(peaks)}]")
         for peak in peaks:
             tags = peak.metadata.get('semantic_tags', [])
             
@@ -397,10 +489,9 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 })
         
         # --- Chokepoints ---
-        self._log(" -> Chokepoint Positions")
+        self._log(f" -> Chokepoint Positions [{len(saddles)}]")
         for saddle in saddles:
             tags = saddle.metadata.get('semantic_tags', [])
-            
             if 'chokepoint' in tags:
                 semantic_index['chokepoints'].append({
                     'id': saddle.feature_id,
@@ -410,10 +501,9 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 })
         
         # --- Assembly Areas ---
-        self._log(" -> Assembly Areas")
+        self._log(f" -> Assembly Areas [{len(flat_zones)}]")
         for flat in flat_zones:
             tags = flat.metadata.get('semantic_tags', [])
-            
             if 'assembly_area' in tags or 'major_assembly_area' in tags:
                 semantic_index['assembly_areas'].append({
                     'id': flat.feature_id,
@@ -424,7 +514,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 })
         
         # --- Cover Positions ---
-        self._log(" -> Cover Positions")
+        self._log(f" -> Cover Positions [{len(ridges)}]")
         for ridge in ridges:
             tags = ridge.metadata.get('semantic_tags', [])
             
@@ -437,7 +527,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 })
         
         # --- Ambush Positions ---
-        self._log(" -> Ambush Positions")
+        self._log(f" -> Ambush Positions [{len(valleys)}]")
         for valley in valleys:
             tags = valley.metadata.get('semantic_tags', [])
             
@@ -517,58 +607,6 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             routes.append(route)
         
         return routes
-    
-    def _log_semantic_summary(self, analyzed: AnalyzedTerrain) -> None:
-        """Log semantic classification summary."""
-        print("\n" + "=" * 60)
-        print("SEMANTIC RESULT")
-        print(f"Template: {self.game_type.value}")
-        
-        # Extract semantic tags
-        defensive = [p for p in analyzed.peaks if 'defensive_position' in p.metadata.get('semantic_tags', [])]
-        observation = [p for p in analyzed.peaks if 'observation_post' in p.metadata.get('semantic_tags', [])]
-        chokepoints = [s for s in analyzed.saddles if 'chokepoint' in s.metadata.get('semantic_tags', [])]
-        assembly = [f for f in analyzed.flat_zones if 'assembly_area' in f.metadata.get('semantic_tags', [])]
-        cover = [r for r in analyzed.ridges if 'defensive_cover' in r.metadata.get('semantic_tags', [])]
-        ambush = [v for v in analyzed.valleys if 'ambush_potential' in v.metadata.get('semantic_tags', [])]
-        
-        print(f"\nTactical Features:")
-        print(f"  • Defensive Positions: {len(defensive)}")
-        print(f"  • Observation Posts: {len(observation)}")
-        print(f"  • Chokepoints: {len(chokepoints)}")
-        print(f"  • Assembly Areas: {len(assembly)}")
-        print(f"  • Cover Positions: {len(cover)}")
-        print(f"  • Ambush Positions: {len(ambush)}")
-        
-        # Feature summary
-        print(f"\nFeature Summary:")
-        print(f"  • Peaks: {len(analyzed.peaks)}")
-        print(f"  • Ridges: {len(analyzed.ridges)}")
-        print(f"  • Valleys: {len(analyzed.valleys)}")
-        print(f"  • Saddles: {len(analyzed.saddles)}")
-        print(f"  • Flat Zones: {len(analyzed.flat_zones)}")
-        
-        # Graph connectivity
-        if analyzed.visibility_graph:
-            vis_edges = sum(len(v) for v in analyzed.visibility_graph.values())
-            print(f"\nGraph Connectivity:")
-            print(f"  • Visibility Edges: {vis_edges // 2}")
-        
-        if analyzed.connectivity_graph:
-            conn_edges = sum(len(v) for v in analyzed.connectivity_graph.values())
-            print(f"  • Connectivity Edges: {conn_edges // 2}")
-        
-        if analyzed.watersheds:
-            print(f"  • Watersheds: {len(analyzed.watersheds)}")
-        
-        # Top defensive positions
-        if defensive:
-            print(f"\nTop Defensive Positions:")
-            sorted_def = sorted(defensive, key=lambda p: p.metadata.get('defensive_score', 0), reverse=True)
-            for p in sorted_def[:5]:
-                score = p.metadata.get('defensive_score', 0)
-                cx, cy = int(p.centroid[0]), int(p.centroid[1])
-                print(f"  • ({cx}, {cy}): {p.prominence:.1f}m prominence, score={score:.2f}")
     
     @property
     def output_schema(self) -> dict:

@@ -192,27 +192,33 @@ class PipelineConfig:
     saddle_confidence_threshold: float = 1.0    # [0.0-1.0] normalized confidence (1.0 = all)
 
     # --- Sea Level ---
-    exclude_below_reference: bool = True        # [True/False] exclude sea domain features
-    elevation_reference_m: float = 8.0         # meters
+    exclude_below_reference: bool = True         # [True/False] exclude sea domain features
+    elevation_reference_m: float = 8.0           # meters
         
     # --- General Topology ---
-    border_margin_px: int = 10                  # [5-30] pixels, ignore edges
-    prominence_search_radius_m: float = 100.0   # [50-500] meters, search radius for prominence
+    border_margin_px: int = 10                   # [5-30] pixels, ignore edges
+    prominence_search_radius_m: float = 100.0    # [50-500] meters, search radius for prominence
+    feature_connection_tolerance_px: float = 5.0 # [1-10] connection tolerance (T pixels at (Template)m/px = N meters)
+    
     
     # =========================================================================
     # LAYER 4: RELATIONAL - Connectivity & Flow
     # =========================================================================
     
+    
     # --- Visibility ---
-    visibility_max_range_m: float = 1200.0      # [200-3000] meters, max line-of-sight distance
+    visibility_max_range_m: float = 750.0      # [200-3000] meters, max line-of-sight distance
     viewshed_sample_step_px: int = 8            # [1-50] pixels, step size for ray casting (performance)
     visibility_sample_radius: int = 5           # [3-15] pixels, sampling radius for viewshed
+    visibility_epsilon_m: float = 0.1           # [0.05-0.5] meters, line-of-sight precision
     
     # --- Flow Network ---
     flow_step_px: int = 10                      # [5-20] pixels, step size for flow accumulation
     flow_neighbor_distance_px: int = 50         # [20-100] pixels, max distance to downstream feature
     
     # --- Connectivity ---
+    connectivity_max_neighbors: int = 20          # [10-50] max neighbors to consider per feature
+    distance_connectivity_fallback_px: int = 50 # [50~] fallcback value
     connection_radius_m: float = 75.0          # [50-500] meters, feature connection radius
     vehicle_climb_angle: float = 25.0           # [20-45] degrees, max slope for vehicles
     cliff_threshold_degrees: float = 45.0       # [30-60] degrees, impassable terrain
@@ -220,6 +226,9 @@ class PipelineConfig:
     # --- Watersheds ---
     watershed_min_area_m2: float = 150.0       # [500-10000] m², minimum watershed area
     watershed_sample_step_px: int = 10          # [5-20] pixels, step size for watershed delineation
+    max_watershed_outlets: int = 100             # [50-500] maximum number of outlets to identify
+    watershed_area_estimate_factor: float = 100.0  # [50-200] multiplier for feature count → area estimate
+    
     
     # =========================================================================
     # LAYER 5: SEMANTICS
@@ -229,30 +238,49 @@ class PipelineConfig:
     max_feature_coverage: float = 0.5           # Max 50% of map for any single feature
     
     # --- Defensive Positions ---
-    
-    # classification thresholds
     threshold_major_peak: float = 15.0          # major peaks [m]
     threshold_minor_peak: float = 5.0           # minor peaks [m]
     saddle_elevation_high: float = 30.0         # saddle elevation high [m]
     saddle_elevation_low: float = 10.0          # saddle elevation low [m]
     valley_avg_slope: float = 15.0              # valley avg slope [m]
-        
     defensive_min_prominence_m: float = 8.0     # [5-30] meters, minimum height advantage
     defensive_min_elevation_m: float = 5.0      # [2-20] meters, minimum absolute height
     defensive_max_slope_deg: float = 25.0       # [15-35] degrees, max slope for defense
     defensive_min_visibility: int = 5           # [3-15] number of visible features
+    defensive_prominence_divisor: float = 20.0     # [10-50] meters
+    defensive_visibility_divisor: float = 10.0     # [5-20] features
     
     # --- Observation Points ---
+    observation_visibility_divisor: float = 15.0   # [10-30] features
     observation_min_prominence_m: float = 10.0  # [5-50] meters, minimum prominence
     observation_min_visibility: int = 10        # [5-30] number of visible features
     
     # --- Assembly Areas ---
     assembly_min_area_m2: float = 2000.0        # [500-10000] square meters, staging area
     assembly_max_slope_deg: float = 5.0         # [2-10] degrees, max slope for assembly
+    assembly_major_area_threshold_m2: float = 10000.0  # [5000-25000] m²
+    assembly_capacity_divisor: float = 100.0           # [50-200] m² per unit
     
     # --- Chokepoints ---
     chokepoint_min_connectivity: int = 2        # [2-5] minimum connections to be chokepoint
+    
+    # --- Cover positions ---
+    cover_quality_width_divisor: float = 10.0      # [5-20] meters
     cover_min_width_m: float = 5.0              # [2-15] meters, minimum cover width
+    
+    # --- Drainage classification
+    drainage_major_threshold: int = 20             # [10-50] upstream features
+    drainage_minor_threshold: int = 5              # [2-15] upstream features
+    
+    # --- Ambush rating
+    ambush_slope_divisor: float = 30.0             # [20-45] degrees
+    ambush_ridge_divisor: float = 3.0              # [2-5] adjacent ridges
+
+    # --- Trafficability classification
+    trafficability_ideal_threshold_deg: float = 5.0    # [3-10] degrees
+    trafficability_good_threshold_deg: float = 15.0    # [10-25] degrees
+    
+    # THIS NEEDS EVALUATION
     analysis_scales: Dict[str, int] = field(default_factory=lambda: {
         "micro": 3,     # [1-5] pixels, noise/small rocks
         "meso": 15,     # [10-30] pixels, gullies/ridges

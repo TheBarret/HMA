@@ -4,10 +4,9 @@ Layer 3: Topological Features
 import numpy as np
 from scipy import ndimage
 from scipy.ndimage import label, find_objects, maximum_filter, minimum_filter
-from skimage import measure, morphology
 from skimage.morphology import skeletonize, remove_small_objects
-from typing import List, Dict, Tuple, Set, Optional
-from dataclasses import dataclass, field
+from typing import List, Dict, Tuple, Set, Optional, Any
+from dataclasses import field
 from uuid import uuid4
 
 from core import (
@@ -30,15 +29,16 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         self._saddle_confidence_threshold = config.saddle_confidence_threshold
         self._saddle_k_min_threshold = config.saddle_k_min_threshold
         self._border_margin = config.border_margin_px
-        self._annular_inner_px = max(3, int(5 / config.horizontal_scale))
-        self._annular_outer_px = max(7, int(12 / config.horizontal_scale))
+        
+        self._annular_inner_px = max(3, int(config.peak_annular_inner_m / config.horizontal_scale))
+        self._annular_outer_px = max(7, int(config.peak_annular_outer_m / config.horizontal_scale))
     
     def _log(self, msg: str) -> None:
         """Helper for verbose logging"""
         if self.config.verbose:
             print(f"[Topological] {msg}")
 
-    def execute(self, input_data: Dict) -> List[TerrainFeature]:
+    def execute(self, input_data: Dict[str, Any]) -> List[TerrainFeature]:
         """Extract discrete terrain features from continuous fields."""
         heightmap = input_data['heightmap']
         mean_curvature = input_data['curvature']
@@ -48,8 +48,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         aspect = input_data.get('aspect', None)
 
         if slope is None or aspect is None:
-            if self.config.verbose:
-                self._log("Slope/aspect not provided, some feature refinement will be limited")
+            self._log("Slope/aspect not provided, some feature refinement will be limited")
 
         self._log(f"Starting feature extraction | shape={heightmap.shape}, cell_size={heightmap.config.horizontal_scale:.4f}m")
         
@@ -97,11 +96,10 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         # commit
         self._build_feature_hierarchy(features)
 
-        if self.config.verbose:
-            self._log(f"Extraction complete | total={len(features)}, peaks={len(peaks)}, ridges={len(ridges)}, valleys={len(valleys)}, saddles={len(saddles)}, flat_zones={len(flat_zones)}")
-            if peaks:
-                avg_confidence = np.mean([p.metadata.get('confidence', 0) for p in peaks])
-                self._log(f"Average peak confidence: {avg_confidence:.3f}")
+        self._log(f"Extraction complete | total={len(features)}, peaks={len(peaks)}, ridges={len(ridges)}, valleys={len(valleys)}, saddles={len(saddles)}, flat_zones={len(flat_zones)}")
+        if peaks:
+            avg_confidence = np.mean([p.metadata.get('confidence', 0) for p in peaks])
+            self._log(f"Average peak confidence: {avg_confidence:.3f}")
 
         return features
 
@@ -146,7 +144,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 filtered.append(feature)
             else:
                 filtered_count += 1
-                # Optional: track filtered features for debugging
+                # track filtered features for debugging
                 feature.metadata['filtered_reason'] = f'below_reference_{ref}m'
         
         if self.config.verbose and filtered_count > 0:
@@ -169,74 +167,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
     def _is_curvature(self, arr: np.ndarray, ctype: CurvatureType) -> np.ndarray:
         """Dtype-agnostic comparison: works for object arrays of enums AND int-encoded arrays."""
         return arr == ctype.name
-
-    def _extract_peaks_old(self, heightmap, curvature_type, gaussian_curvature,
-                       k_confidence, mean_curvature, slope) -> List[PeakFeature]:
-        """Extract peaks using regional maxima + curvature type validation."""
-        from skimage import morphology
-        from scipy import ndimage
-
-        z = heightmap.data
-        cell_size = heightmap.config.horizontal_scale
-        peaks = []
-
-        z_smooth = ndimage.gaussian_filter(z, sigma=1.5)
-        regional_max_mask = morphology.local_maxima(z_smooth, connectivity=2)
-        labeled_peaks, num_candidates = ndimage.label(regional_max_mask)
-
-        self._log(f"Peak candidates: {num_candidates} regional maxima")
-        
-        if num_candidates == 0:
-            self._log("No regional maxima found, using elevation fallback")
-            return self._extract_peaks_fallback(heightmap, slope)
-
-        shoulder_radius_inner = max(2, int(3 / cell_size))
-        shoulder_radius_outer = max(10, int(20 / cell_size))
-
-        validated_count = 0
-        for i in range(1, num_candidates + 1):
-            peak_pixels = np.argwhere(labeled_peaks == i)
-            if len(peak_pixels) < self._min_feature_size:
-                continue
-
-            centroid_y, centroid_x = peak_pixels.mean(axis=0).astype(int)
-
-            y, x = np.ogrid[:z.shape[0], :z.shape[1]]
-            dist = np.sqrt((x - centroid_x)**2 + (y - centroid_y)**2)
-            shoulder_mask = (dist >= shoulder_radius_inner) & (dist <= shoulder_radius_outer)
-
-            shoulder_types = curvature_type[shoulder_mask]
-            if len(shoulder_types) < 10:
-                continue
-
-            #convex_count = np.sum(self._is_curvature(shoulder_types, CurvatureType.CONVEX))
-            # changed: add CYLINDRICAL variant
-            convex_count = np.sum(
-                self._is_curvature(shoulder_types, CurvatureType.CONVEX) |
-                self._is_curvature(shoulder_types, CurvatureType.CYLINDRICAL_CONVEX)
-            )
-            convex_ratio = convex_count / len(shoulder_types)
-                      
-            if convex_ratio >= self.config.peak_shoulder_convex_ratio:
-                prominence = self._calculate_prominence(heightmap, (centroid_x, centroid_y))
-                if prominence > self.config.peak_min_prominence_m:
-                    mask = (labeled_peaks == i)
-                    peaks.append(self._create_peak_feature(
-                        heightmap, mask, (centroid_x, centroid_y), prominence,
-                        mean_curvature, gaussian_curvature, slope,
-                        method="curvature_annular"
-                    ))
-                    validated_count += 1
-        
-        self._log(f"Peaks validated: {validated_count} (convex_ratio threshold={self.config.peak_shoulder_convex_ratio})")
-
-        if len(peaks) == 0:
-            self._log("No curvature-validated peaks detected, using elevation fallback")
-            return self._extract_peaks_fallback(heightmap, slope)
-
-        return peaks
-
-    # Change: added `CONVEX` dome variants
+    
     def _extract_peaks(self, heightmap, curvature_type, gaussian_curvature,
                    k_confidence, mean_curvature, slope) -> List[PeakFeature]:
         """
@@ -245,6 +176,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         For peak validation, we consider both CONVEX and CYLINDRICAL_CONVEX
         as "convex enough" because peak flanks are often cylindrical.
         """
+        
         from skimage import morphology
         from scipy import ndimage
 
@@ -252,7 +184,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         cell_size = heightmap.config.horizontal_scale
         peaks = []
 
-        z_smooth = ndimage.gaussian_filter(z, sigma=1.5)
+        z_smooth = ndimage.gaussian_filter(z, sigma=self.config.peak_smooth_sigma)
         regional_max_mask = morphology.local_maxima(z_smooth, connectivity=2)
         labeled_peaks, num_candidates = ndimage.label(regional_max_mask)
 
@@ -262,8 +194,8 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             self._log("No regional maxima found, using elevation fallback")
             return self._extract_peaks_fallback(heightmap, slope)
 
-        shoulder_radius_inner = max(2, int(3 / cell_size))
-        shoulder_radius_outer = max(10, int(20 / cell_size))
+        shoulder_radius_inner = max(2, int(self.config.peak_annular_inner_m / cell_size)) 
+        shoulder_radius_outer = max(10, int(self.config.peak_annular_outer_m / cell_size)) 
 
         validated_count = 0
         for i in range(1, num_candidates + 1):
@@ -369,74 +301,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         peak._avg_slope = float(avg_slope)
         return peak
 
-    def _extract_ridges_old(self, heightmap: Heightmap, curvature_type: np.ndarray,
-                        gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
-                        mean_curvature: np.ndarray, slope: Optional[np.ndarray],
-                        aspect: Optional[np.ndarray]) -> List[RidgeFeature]:
-        """Extract ridge lines from convex regions with skeletonization."""
-        z = heightmap.data
-        ridges = []
-
-        convex_mask = self._is_curvature(curvature_type, CurvatureType.CONVEX)
-        cylindrical_mask = (
-            (np.abs(mean_curvature) > self.config.curvature_epsilon_h_min) &
-            (np.abs(gaussian_curvature) < self.config.curvature_epsilon_k_min) &
-            (slope is not None) &
-            (slope > self.config.flat_zone_slope_threshold_deg)
-        )
-        ridge_mask = convex_mask | cylindrical_mask
-        
-        ridge_pixels = np.sum(ridge_mask)
-        self._log(f"Ridge mask pixels: {ridge_pixels} ({100*ridge_pixels/ridge_mask.size:.1f}%)")
-        
-        cleaned = remove_small_objects(ridge_mask, min_size=self._min_feature_size)
-        skeleton = skeletonize(cleaned)
-        skeleton = remove_small_objects(skeleton, min_size=self._min_ridge_length)
-        labeled, num_features = label(skeleton)
-        
-        self._log(f"Ridge candidates: {num_features} (min_length={self._min_ridge_length}px)")
-        
-        validated_count = 0
-        for i in range(1, num_features + 1):
-            mask = (labeled == i)
-            ys, xs = np.where(mask)
-
-            if len(xs) < self._min_ridge_length:
-                continue
-
-            spine_points = self._order_spine_points(xs, ys)
-            centroid_px = (int(np.mean(xs)), int(np.mean(ys)))
-            elevations = z[ys, xs]
-            elevation_range = (np.min(elevations), np.max(elevations))
-            connected_peaks = self._find_connected_peaks(heightmap, spine_points)
-            avg_slope = np.mean(slope[ys, xs]) if slope is not None else 10.0
-            avg_confidence = np.mean(k_confidence[ys, xs])
-            
-            ridge_curvatures = mean_curvature[ys, xs]
-            avg_curvature = np.mean(np.abs(ridge_curvatures))
-            cell_size = heightmap.config.horizontal_scale
-            width_meters = 1.0 / (avg_curvature * cell_size) if avg_curvature > 0 else self._ridge_width * cell_size
-
-            ridge = RidgeFeature(
-                centroid=centroid_px,
-                elevation_range=elevation_range,
-                spine_points=spine_points,
-                connected_peaks=connected_peaks,
-                metadata={
-                    'length': len(spine_points),
-                    'width_meters': float(width_meters),
-                    'confidence': float(avg_confidence),
-                    'avg_curvature': float(avg_curvature)
-                }
-            )
-            ridge._avg_slope = float(avg_slope)
-            ridges.append(ridge)
-            validated_count += 1
-        
-        self._log(f"Ridges validated: {validated_count}")
-        return ridges
-
-    # Change: added `CYLINDRICAL_CONVEX` variants
     def _extract_ridges(self, heightmap: Heightmap, curvature_type: np.ndarray,
                     gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
                     mean_curvature: np.ndarray, slope: Optional[np.ndarray],
@@ -448,15 +312,14 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         - CONVEX: dome-like features (peak tops, rounded ridges)
         - CYLINDRICAL_CONVEX: true ridge lines (linear convex features)
         """
+        
         z = heightmap.data
         ridges = []
 
-        # Use both CONVEX and CYLINDRICAL_CONVEX for ridge detection
+        # CONVEX and CYLINDRICAL_CONVEX for ridge detection
         convex_mask = self._is_curvature(curvature_type, CurvatureType.CONVEX)
         cylindrical_convex_mask = self._is_curvature(curvature_type, CurvatureType.CYLINDRICAL_CONVEX)
         ridge_mask = convex_mask | cylindrical_convex_mask
-        
-        # No need for the cylindrical_mask fallback anymore - it's now in classification
         
         ridge_pixels = np.sum(ridge_mask)
         self._log(f"Ridge mask pixels: {ridge_pixels} ({100*ridge_pixels/ridge_mask.size:.1f}%)")
@@ -480,7 +343,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             centroid_px = (int(np.mean(xs)), int(np.mean(ys)))
             elevations = z[ys, xs]
             elevation_range = (np.min(elevations), np.max(elevations))
-            connected_peaks = self._find_connected_peaks(heightmap, spine_points)
+            connected_peaks = set()
             avg_slope = np.mean(slope[ys, xs]) if slope is not None else 10.0
             avg_confidence = np.mean(k_confidence[ys, xs])
             
@@ -515,62 +378,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         self._log(f"Ridges validated: {validated_count}")
         return ridges
 
-    def _extract_valleys_old(self, heightmap: Heightmap, curvature_type: np.ndarray,
-                         gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
-                         mean_curvature: np.ndarray, slope: Optional[np.ndarray],
-                         aspect: Optional[np.ndarray]) -> List[ValleyFeature]:
-        """Extract valley lines from concave regions."""
-        z = heightmap.data
-        valleys = []
-
-        concave_mask = self._is_curvature(curvature_type, CurvatureType.CONCAVE) & (gaussian_curvature > 0)
-        
-        valley_pixels = np.sum(concave_mask)
-        self._log(f"Valley mask pixels: {valley_pixels} ({100*valley_pixels/concave_mask.size:.1f}%)")
-        
-        cleaned = remove_small_objects(concave_mask, min_size=self._min_feature_size)
-        skeleton = skeletonize(cleaned)
-        skeleton = remove_small_objects(skeleton, min_size=self._min_ridge_length)
-        labeled, num_features = label(skeleton)
-        
-        self._log(f"Valley candidates: {num_features} (min_length={self._min_ridge_length}px)")
-        
-        validated_count = 0
-        for i in range(1, num_features + 1):
-            mask = (labeled == i)
-            ys, xs = np.where(mask)
-
-            if len(xs) < self._min_ridge_length:
-                continue
-
-            spine_points = self._order_spine_points(xs, ys)
-            centroid_px = (int(np.mean(xs)), int(np.mean(ys)))
-            elevations = z[ys, xs]
-            elevation_range = (np.min(elevations), np.max(elevations))
-            avg_slope = np.mean(slope[ys, xs]) if slope is not None else 10.0
-            avg_confidence = np.mean(k_confidence[ys, xs])
-            drainage_area = self._estimate_drainage_area(heightmap, spine_points, aspect)
-            
-            valley = ValleyFeature(
-                centroid=centroid_px,
-                elevation_range=elevation_range,
-                spine_points=spine_points,
-                drainage_area=drainage_area,
-                metadata={
-                    'length': len(spine_points),
-                    'confidence': float(avg_confidence),
-                    'avg_slope': float(avg_slope),
-                    'avg_curvature': float(np.mean(mean_curvature[ys, xs]))
-                }
-            )
-            valley._avg_slope = float(avg_slope)
-            valleys.append(valley)
-            validated_count += 1
-        
-        self._log(f"Valleys validated: {validated_count}")
-        return valleys
-        
-    # Change: added `CYLINDRICAL_CONVEX` variants
     def _extract_valleys(self, heightmap: Heightmap, curvature_type: np.ndarray,
                      gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
                      mean_curvature: np.ndarray, slope: Optional[np.ndarray],
@@ -582,10 +389,11 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         - CONCAVE: bowl-like features (depressions, valley bottoms)
         - CYLINDRICAL_CONCAVE: true valley lines (linear concave features)
         """
+        
         z = heightmap.data
         valleys = []
 
-        # Use both CONCAVE and CYLINDRICAL_CONCAVE for valley detection
+        # CONCAVE and CYLINDRICAL_CONCAVE for valley detection
         concave_mask = self._is_curvature(curvature_type, CurvatureType.CONCAVE)
         cylindrical_concave_mask = self._is_curvature(curvature_type, CurvatureType.CYLINDRICAL_CONCAVE)
         valley_mask = concave_mask | cylindrical_concave_mask
@@ -821,7 +629,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         x, y = peak_px
         peak_elev = z[y, x]
 
-        radius = int(200 / heightmap.config.horizontal_scale)
+        radius = int(self.config.prominence_search_radius_m / heightmap.config.horizontal_scale)
         y_min = max(0, y - radius)
         y_max = min(z.shape[0], y + radius)
         x_min = max(0, x - radius)
@@ -873,18 +681,91 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
 
         return [(int(xs[i]), int(ys[i])) for i in ordered_idx]
 
-    def _find_connected_peaks(self, heightmap: Heightmap, spine_points: List[PixelCoord]) -> Set[str]:
-        """Find peak IDs connected to this ridge."""
-        return set()
+    #def _find_connected_peaks(self, heightmap: Heightmap, spine_points: List[PixelCoord]) -> Set[str]:
+    #    """Find peak IDs connected to this ridge."""
+    #    
+    #    # TODO
+    #    return set()
 
-    def _find_saddle_connections(self, heightmap: Heightmap, saddle_px: PixelCoord) -> Dict:
-        """Find ridges and valleys connected to saddle."""
-        return {'ridges': set(), 'valleys': set()}
+    #def _find_saddle_connections(self, heightmap: Heightmap, saddle_px: PixelCoord) -> Dict:
+    #    """Find ridges and valleys connected to saddle."""
+    #    
+    #    # TODO
+    #    return {'ridges': set(), 'valleys': set()}
 
+    #def _build_feature_hierarchy(self, features: List[TerrainFeature]) -> None:
+    #    """Build hierarchical relationships between features."""
+    #    
+    #    # TODO
+    #   pass
+    
+    
     def _build_feature_hierarchy(self, features: List[TerrainFeature]) -> None:
         """Build hierarchical relationships between features."""
-        pass
+        self._log('Build hierarchical relationships...')
+        # Separate by type
+        peaks = [f for f in features if isinstance(f, PeakFeature)]
+        ridges = [f for f in features if isinstance(f, RidgeFeature)]
+        valleys = [f for f in features if isinstance(f, ValleyFeature)]
+        saddles = [f for f in features if isinstance(f, SaddleFeature)]
+        
+        # Connect ridges to peaks
+        for ridge in ridges:
+            ridge.connected_peaks = self._find_connected_peaks(ridge.spine_points, peaks)
+        
+        # Connect saddles to ridges and valleys
+        for saddle in saddles:
+            conn = self._find_saddle_connections(saddle.centroid, ridges, valleys)
+            saddle.connecting_ridges = conn['ridges']
+            saddle.connecting_valleys = conn['valleys']
+    
+    def _find_connected_peaks(self, spine_points: List[PixelCoord], peaks: List[PeakFeature]) -> Set[str]:
+        """Find peak IDs connected to this ridge."""
+        connected = set()
+        tolerance = self.config.feature_connection_tolerance_px
+        
+        if len(spine_points) < 2:
+            return connected
+        
+        # Check endpoints of the ridge spine (first and last points)
+        endpoints = [spine_points[0], spine_points[-1]]
+        
+        for x, y in endpoints:
+            for peak in peaks:
+                px, py = peak.centroid
+                if abs(x - px) <= tolerance and abs(y - py) <= tolerance:
+                    connected.add(peak.feature_id)
+        
+        if len(connected) > 0:
+            self._log(f'found {len(connected)} peaks connected to ridge endpoint, tolerance={tolerance}')
+        
+        return connected
 
+    def _find_saddle_connections(self, saddle_px: PixelCoord,
+                                  ridges: List[RidgeFeature],
+                                  valleys: List[ValleyFeature]) -> Dict:
+        """Find ridges and valleys connected to saddle."""
+        sx, sy = saddle_px
+        tolerance = self.config.feature_connection_tolerance_px
+        connections = {'ridges': set(), 'valleys': set()}
+        _track = 0
+        for ridge in ridges:
+            for rx, ry in ridge.spine_points:
+                if abs(sx - rx) <= tolerance and abs(sy - ry) <= tolerance:
+                    connections['ridges'].add(ridge.feature_id)
+                    _track +=1
+                    break
+        
+        for valley in valleys:
+            for vx, vy in valley.spine_points:
+                if abs(sx - vx) <= tolerance and abs(sy - vy) <= tolerance:
+                    connections['valleys'].add(valley.feature_id)
+                    _track +=1
+                    break
+        if _track > 0:
+            self._log(f'found {_track} ridges and valleys, PixelCoord[{sx,sy},tolerance={tolerance}]')
+        return connections
+    
     @property
     def output_schema(self) -> dict:
         return {
