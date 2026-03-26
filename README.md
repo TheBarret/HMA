@@ -27,7 +27,10 @@ Compare detected output features against ground truth will calibrate our model, 
 
 command-line: `python run.py <heightmap> --style military --overlays none --output output.png`
 
-console:  
+<img width="1024" src="https://github.com/user-attachments/assets/82fd9642-4742-4fc0-8d91-6d34f226f2be" />
+
+command-line: `python run.py <heightmap> --style gis --overlays all --output output.png`
+
 ```
   python analyse.py map.png
   python analyse.py map.png --style game
