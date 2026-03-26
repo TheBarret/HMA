@@ -269,8 +269,8 @@ class PipelineConfig:
     cover_min_width_m: float = 5.0              # [2-15] meters, minimum cover width
     
     # --- Drainage classification
-    drainage_major_threshold: int = 20             # [10-50] upstream features
-    drainage_minor_threshold: int = 5              # [2-15] upstream features
+    drainage_major_threshold: int = 3             # [1-15~] upstream features
+    drainage_minor_threshold: int = 1              # [1-15~] upstream features
     
     # --- Ambush rating
     ambush_slope_divisor: float = 30.0             # [20-45] degrees

@@ -249,13 +249,16 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                                            (visible_count / self.config.defensive_visibility_divisor)
                                       )
                 peak.metadata['defensive_score'] = defensive_score
+                self._log(f"defensive post: visibility_count={visible_count}, score={defensive_score}")
             
             # Observation post (requires high visibility from peak)
             if (peak.prominence >= thresholds["observation_min_prominence_m"] and
                 visible_count >= thresholds["observation_min_visibility"]):
                 tags.append("observation_post")
                 peak.metadata['visibility_count'] = visible_count
-                peak.metadata['observation_score'] = min(1.0, visible_count / self.config.observation_visibility_divisor)
+                _score = min(1.0, visible_count / self.config.observation_visibility_divisor)
+                peak.metadata['observation_score'] = _score
+                self._log(f"observation post: visibility_count={visible_count}, score={_score}")
             
             # Major/Minor classification
             if peak.prominence > self.config.threshold_major_peak:
@@ -275,9 +278,12 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             
             if width >= thresholds["cover_min_width_m"]:
                 tags.append("defensive_cover")
-                ridge.metadata['cover_quality'] = min(1.0, width / self.config.cover_quality_width_divisor)
+                _score = min(1.0, width / self.config.cover_quality_width_divisor)
+                ridge.metadata['cover_quality'] = _score
+                self._log(f"cover ridge [defensive]: meters={width} score={_score}") 
             else:
                 tags.append("exposed_crest")
+                self._log(f"cover ridge [crest]: meters={width}") 
             
             # Tactical significance based on connectivity graph
             connected_to = connectivity.get(ridge.feature_id, set())
@@ -306,14 +312,23 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                     upstream_features.append(src_id)
             
             upstream_count = len(upstream_features)
+            
+            # dynamic thresholds based on map size
+            total_features = len(peaks) + len(ridges) + len(valleys) + len(saddles) + len(flat_zones)
+            self.drainage_major_threshold = max(1, total_features // 100)  # Top 1% # MOVE TO CONFIG
+            self.drainage_minor_threshold = max(1, total_features // 500)  # Top 0.2%  # MOVE TO CONFIG
+            
             if upstream_count > self.config.drainage_major_threshold:  # High flow
                 tags.append("major_drainage")
                 valley.metadata['drainage_magnitude'] = upstream_count
+                self._log(f"drainage valley [large]: upstream_count={upstream_count}, major={self.drainage_major_threshold}, minor={self.drainage_minor_threshold}") 
             elif upstream_count > self.config.drainage_minor_threshold: # low flow
                 tags.append("minor_drainage")
+                self._log(f"drainage valley [small]: upstream_count={upstream_count}, major={self.drainage_major_threshold}, minor={self.drainage_minor_threshold}") 
                 valley.metadata['drainage_magnitude'] = upstream_count
             else:                                                       # default to gully 
                 tags.append("gully")
+                self._log(f"drainage valley [gully]: upstream_count={upstream_count}, major={self.drainage_major_threshold}, minor={self.drainage_minor_threshold}") 
             
             # Ambush potential: narrow valleys with steep sides
             # Use connectivity graph to find adjacent steep ridges
@@ -325,11 +340,14 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             # Ambush requires both steep slopes and constricting terrain (adjacent ridges)
             if avg_slope > self.config.valley_avg_slope and len(adjacent_ridges) >= 2:
                 tags.append("ambush_potential")
-                valley.metadata['ambush_rating'] = min(1.0, (avg_slope / self.config.ambush_slope_divisor) * 
-                                                            (len(adjacent_ridges) / self.config.ambush_ridge_divisor)
-                                                       )
+                _rating = min(1.0, (avg_slope / self.config.ambush_slope_divisor) * 
+                                                            (len(adjacent_ridges) / self.config.ambush_ridge_divisor))
+                valley.metadata['ambush_rating'] = _rating
+                self._log(f"tactical classification: ambush potential, rating={_rating}") 
+                
             elif avg_slope > self.config.valley_avg_slope:
                 tags.append("steep_ravine")
+                self._log("tactical classification: steep ravine") 
             
             valley.metadata['semantic_tags'] = tags
         
@@ -361,6 +379,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 saddle.metadata['valley_connections'] = valley_count
                 
                 # Higher tactical value if chokepoint connects multiple ridges
+                self._log(f"chokepoint ridge={ridge_count}, elevation={saddle.elevation}") 
                 if ridge_count >= 2:
                     saddle.metadata['tactical_value'] = "high"
                 elif ridge_count == 1 and valley_count >= 1:
@@ -393,7 +412,8 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 else:
                     tags.append("assembly_area")
                 
-                flat.metadata['assembly_capacity'] = area_m2 / self.config.assembly_capacity_divisor
+                _acap = area_m2 / self.config.assembly_capacity_divisor
+                flat.metadata['assembly_capacity'] = _acap
                 
                 # Check connectivity to nearby tactical features
                 # Use the peaks list directly instead of _feature_index
@@ -406,8 +426,10 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                             nearby_defensive.append(cid)
                             break
                 flat.metadata['defensive_coverage'] = len(nearby_defensive)
+                self._log(f"assembly areas: capacity={_acap}m2, coverage={len(nearby_defensive)}")
             else:
                 tags.append("small_clearing")
+                self._log(f"assembly areas: capacity={_acap}m2, small clearing")
             
             # Traversability rating based on slope
             if max_slope < self.config.trafficability_ideal_threshold_deg:
@@ -538,6 +560,20 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                     'rating': valley.metadata.get('ambush_rating', 0),
                     'centroid': valley.centroid,
                 })
+        
+        # --- Hydro Features (Drainage Network) ---
+        self._log(f" -> Hydro Features [{len(valleys)}]")
+        semantic_index['hydro_features'] = []
+        for valley in valleys:
+            drainage_mag = valley.metadata.get('drainage_magnitude', 0)
+            if drainage_mag > 0:
+                semantic_index['hydro_features'].append({
+                    'id': valley.feature_id,
+                    'spine': valley.spine_points,
+                    'centroid': valley.centroid,
+                    'drainage_magnitude': drainage_mag,
+                })
+
         
         # --- Vehicle Routes ---
         vehicle_routes = self._extract_vehicle_routes(connectivity, heightmap)

@@ -169,7 +169,7 @@ class GISVisualizer(BaseVisualizer):
     
     def _draw_hydro(self, ax: plt.Axes, semantic_index: Dict) -> None:
         """Drainage networks (valleys with flow magnitude)."""
-        for item in semantic_index.get('ambush_positions', []):
+        for item in semantic_index.get('hydro_features', []):
             drainage_mag = item.get('drainage_magnitude', 0)
             if drainage_mag > 0:
                 self._draw_drainage_line(ax, item, drainage_mag)
@@ -180,12 +180,9 @@ class GISVisualizer(BaseVisualizer):
         for item in semantic_index.get('defensive_positions', []):
             score = item.get('defensive_score', 0.5)
             self._enhance_defensive_quality(ax, item, score)
-        
-        # Enhance ridges with cover quality thickness (already handled in _draw_ridge_line)
-        # Enhance chokepoints with connectivity degree size (already handled)
-    
+  
     # =========================================================================
-    # Individual Drawing Helpers (unchanged from your original)
+    # Individual Drawing Helpers 
     # =========================================================================
     
     def _draw_assembly_polygon(self, ax, item: Dict) -> None:

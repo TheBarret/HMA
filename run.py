@@ -1,9 +1,3 @@
-"""
-HMA Framework - Analysis Orchestrator
-
-Runs the pipeline and produces visualization using selected style and overlays.
-"""
-
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -155,6 +149,9 @@ Examples:
   python analyse.py map.png --style gis --overlays strategic tactical
   python analyse.py map.png --style military --overlays all --output military_map.png
   python analyse.py map.png --style orienteering --overlays none
+
+
+  REMARK: ONLY GIS HAS OVERLAYS ATM!
 
 Overlay Types:
   strategic   - Defensive positions, observation posts
