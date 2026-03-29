@@ -11,7 +11,7 @@ using `synthetic terrain`  to generate heightmaps with known features.
 
 Compare detected output features against ground truth will calibrate our model, using predefined config parameters located `core.py`.  
 
-<img width="450" src="https://github.com/user-attachments/assets/d0a403b5-128b-448f-9a8c-346ef5fc9089" /><img width="425" src="https://github.com/user-attachments/assets/6a75743e-2ca6-422e-9423-c49e607d0f88" />
+<img width="400" src="https://github.com/user-attachments/assets/d0a403b5-128b-448f-9a8c-346ef5fc9089" /><img width="380" src="https://github.com/user-attachments/assets/6a75743e-2ca6-422e-9423-c49e607d0f88" />
 
 
 # Early Testing
