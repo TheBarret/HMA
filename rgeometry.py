@@ -1,13 +1,14 @@
 """
 Layer 2: Regional Geometry Module
-
 """
 
 import numpy as np
+import hashlib
+import json
 from scipy import ndimage
 from typing import Dict, Tuple, Optional
 
-from core import Heightmap, ScalarField, PipelineConfig, PipelineLayer
+from core import Heightmap, ScalarField, PipelineConfig, PipelineLayer, Datacache
 
 class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
     """
@@ -18,6 +19,10 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
     
     def __init__(self, config: PipelineConfig):
         super().__init__(config)
+        self.cache = Datacache(
+            layer_name="layer2",
+            cache_dir=config.cache_dir
+        )
         self.adaptive_epsilon = config.adaptive_epsilon  # Read from config
         self._epsilon_used: Optional[tuple[float, float]] = None
     
@@ -33,10 +38,22 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         Returns:
             dict with 'curvature' (mean curvature), 'gaussian_curvature', and 'curvature_type'
         """
-        self._log(f"Computing curvature fields | shape={input_data.shape}, cell_size={input_data.config.horizontal_scale:.4f}m")
+        self._log(f"Computing curvature fields, shape={input_data.shape}, cell_size={input_data.config.horizontal_scale:.4f}m")
         
         if not isinstance(input_data, Heightmap):
             raise TypeError(f"Expected Heightmap, got {type(input_data)}")
+        
+        cache_id = self._get_cache_id(input_data)
+        
+        # Check cache
+        if (self.cache.exists(cache_id, "config", "json") and 
+            self.cache.exists(cache_id, "mean", "npy") and 
+            self.cache.exists(cache_id, "gauss", "npy") and 
+            self.cache.exists(cache_id, "type", "npy")):
+            return self._load_from_cache(cache_id)
+       
+        # get hash
+        result = self._compute_hash(input_data)
         
         z = input_data.data
         cell_size = input_data.config.horizontal_scale
@@ -64,11 +81,18 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
         # Log statistics
         self._log_classification_stats(curvature_type, h_epsilon, k_epsilon)
         
-        return {
+        # prepare
+        result = {
             "curvature": mean_curvature.astype(np.float32),
             "gaussian_curvature": gaussian_curvature.astype(np.float32),
             "curvature_type": curvature_type
         }
+        
+        # post snapshot
+        self._save_to_cache(cache_id, result)
+        
+        # commit
+        return result
     
     def _compute_curvature(self, z: ScalarField, cell_size: float) -> Tuple[ScalarField, ScalarField]:
         """Compute mean and Gaussian curvature using full differential geometry formulas."""
@@ -244,8 +268,96 @@ class Layer2_RegionalGeometry(PipelineLayer[Dict[str, ScalarField]]):
             }
         }
     
+    # ---------------------------------------------------------------------
+    # Interfaces
+    # ---------------------------------------------------------------------
+    
     @property
     def epsilon_used(self) -> Optional[tuple[float, float]]:
         """Get (h_epsilon, k_epsilon) used in the last classification."""
         return self._epsilon_used
         
+    # ---------------------------------------------------------------------
+    # Caching mechanics
+    # ---------------------------------------------------------------------
+    
+    def _compute_hash(self, heightmap: Heightmap) -> str:
+        # Hash the elevation data
+        data_hash = hashlib.sha256(heightmap.data.tobytes()).hexdigest()
+        
+        # Hash all config parameters that affect curvature computation
+        config_params = {
+            "adaptive_epsilon": self.config.adaptive_epsilon,
+            "curvature_epsilon": self.config.curvature_epsilon,
+            "curvature_epsilon_h_factor": self.config.curvature_epsilon_h_factor,
+            "curvature_epsilon_k_factor": self.config.curvature_epsilon_k_factor,
+            "adaptive_percentile": self.config.adaptive_percentile,
+            "curvature_epsilon_h_min": self.config.curvature_epsilon_h_min,
+            "curvature_epsilon_h_max": self.config.curvature_epsilon_h_max,
+            "curvature_epsilon_k_min": self.config.curvature_epsilon_k_min,
+            "curvature_epsilon_k_max": self.config.curvature_epsilon_k_max,
+        }
+        config_str = json.dumps(config_params, sort_keys=True)
+        config_hash = hashlib.sha256(config_str.encode()).hexdigest()
+        
+        return self.cache.make_key(data_hash, config_hash)
+    
+    def _get_cache_id(self, heightmap: Heightmap) -> str:
+        # Hash elevation data
+        data_hash = hashlib.sha256(heightmap.data.tobytes()).hexdigest()
+        
+        # Hash all config parameters that affect curvature computation
+        config_params = {
+            "adaptive_epsilon": self.config.adaptive_epsilon,
+            "curvature_epsilon": self.config.curvature_epsilon,
+            "curvature_epsilon_h_factor": self.config.curvature_epsilon_h_factor,
+            "curvature_epsilon_k_factor": self.config.curvature_epsilon_k_factor,
+            "adaptive_percentile": self.config.adaptive_percentile,
+            "curvature_epsilon_h_min": self.config.curvature_epsilon_h_min,
+            "curvature_epsilon_h_max": self.config.curvature_epsilon_h_max,
+            "curvature_epsilon_k_min": self.config.curvature_epsilon_k_min,
+            "curvature_epsilon_k_max": self.config.curvature_epsilon_k_max,
+        }
+        config_str = json.dumps(config_params, sort_keys=True)
+        config_hash = hashlib.sha256(config_str.encode()).hexdigest()
+        
+        return self.cache.make_key(data_hash, config_hash)
+    
+    def _save_to_cache(self, cache_id: str, result: Dict[str, ScalarField]) -> None:
+        """Save curvature results to cache."""
+        
+        # self._epsilon_used = numpy float32
+        h_eps, k_eps = self._epsilon_used
+        _epsilon_used_primitive = (float(h_eps), float(k_eps))
+        
+        metadata = {
+            "layer": 2,
+            "adaptive_epsilon": self.config.adaptive_epsilon,
+            "epsilon_used": _epsilon_used_primitive,
+            "shape": result["curvature"].shape,
+            "dtype": str(result["curvature"].dtype)
+        }
+        self.cache.save_json(cache_id, "config", metadata)
+        self.cache.save_array(cache_id, "mean", result["curvature"])
+        self.cache.save_array(cache_id, "gauss", result["gaussian_curvature"])
+        self.cache.save_array(cache_id, "type", result["curvature_type"])
+    
+    def _load_from_cache(self, cache_id: str) -> Dict[str, ScalarField]:
+        """Load curvature results from cache."""
+        metadata = self.cache.load_json(cache_id, "config")
+        
+        # self._epsilon_used = numpy float32
+        if "epsilon_used" in metadata:
+            eps = metadata["epsilon_used"]
+            self._epsilon_used = (float(eps[0]), float(eps[1]))
+        
+        # Load arrays
+        mean = self.cache.load_array(cache_id, "mean")
+        gauss = self.cache.load_array(cache_id, "gauss")
+        ctype = self.cache.load_array(cache_id, "type")
+        
+        return {
+            "curvature": mean,
+            "gaussian_curvature": gauss,
+            "curvature_type": ctype
+        }

@@ -138,7 +138,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         if len(important) < 2:
             return visibility
         
-        self._log(f"Checking visibility between {len(important)} important features")
+        self._log(f"Checking visibility between {len(important)} features")
         
         n = len(important)
         checked = 0

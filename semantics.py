@@ -1,9 +1,5 @@
 """
 Layer 5: Semantic Interpretation
-
-Assembles all prior outputs into the final AnalyzedTerrain object.
-Applies domain thresholds and classification rules to produce
-tactical terrain categories for combat games (Arma, WoT, War Thunder).
 """
 
 import numpy as np
@@ -15,7 +11,7 @@ from core import (
     Heightmap, ScalarField, PipelineConfig, PipelineLayer,
     TerrainFeature, ClassifiedFeature,
     PeakFeature, RidgeFeature, ValleyFeature, SaddleFeature, FlatZoneFeature,
-    AnalyzedTerrain, LayerBundle, PixelCoord, WorldCoord, Template
+    AnalyzedTerrain, LayerBundle, PixelCoord, WorldCoord
 )
 
 
@@ -34,15 +30,10 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
     
     def __init__(self, config: PipelineConfig):
         super().__init__(config)
-        self.baseline = config.baseline
         
         # internal storage
         self.max_feature_area: float = 0.0
         self.total_area_m2: float = 0.0
-        
-        # Template thresholds
-        self._log(f'using template: {self.baseline}')
-        self._template_thresholds = self._get_template_thresholds()
         
         # Coverage filtering
         self._max_feature_coverage = self.config.max_feature_coverage
@@ -53,63 +44,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         if self.config.verbose:
             print(f"[Semantics] {msg}")
             
-    def _get_template_thresholds(self) -> Dict[str, Any]:
-        """Get game-specific tactical thresholds."""
-        thresholds = {
-            Template.ARMA_3: {
-                "defensive_min_prominence_m": 8.0,
-                "defensive_min_elevation_m": 5.0,
-                "defensive_max_slope_deg": 25.0,
-                "defensive_min_visibility": 5,
-                "observation_min_prominence_m": 10.0,
-                "observation_min_visibility": 10,
-                "assembly_min_area_m2": 2000,
-                "assembly_max_slope_deg": 5.0,
-                "chokepoint_min_connectivity": 2,
-                "cover_min_width_m": 5.0,
-                "vehicle_route_max_slope_deg": 25.0,
-            },
-            Template.WORLD_OF_TANKS: {
-                "defensive_min_prominence_m": 5.0,
-                "defensive_min_elevation_m": 3.0,
-                "defensive_max_slope_deg": 20.0,
-                "defensive_min_visibility": 3,
-                "observation_min_prominence_m": 8.0,
-                "observation_min_visibility": 8,
-                "assembly_min_area_m2": 1000,
-                "assembly_max_slope_deg": 3.0,
-                "chokepoint_min_connectivity": 2,
-                "cover_min_width_m": 4.0,
-                "vehicle_route_max_slope_deg": 20.0,
-            },
-            Template.WAR_THUNDER: {
-                "defensive_min_prominence_m": 6.0,
-                "defensive_min_elevation_m": 4.0,
-                "defensive_max_slope_deg": 25.0,
-                "defensive_min_visibility": 5,
-                "observation_min_prominence_m": 10.0,
-                "observation_min_visibility": 12,
-                "assembly_min_area_m2": 1500,
-                "assembly_max_slope_deg": 5.0,
-                "chokepoint_min_connectivity": 2,
-                "cover_min_width_m": 5.0,
-                "vehicle_route_max_slope_deg": 25.0,
-            },
-            Template.ARMA_2: {
-                "defensive_min_prominence_m": 10.0,
-                "defensive_min_elevation_m": 6.0,
-                "defensive_max_slope_deg": 25.0,
-                "defensive_min_visibility": 5,
-                "observation_min_prominence_m": 12.0,
-                "observation_min_visibility": 8,
-                "assembly_min_area_m2": 2500,
-                "assembly_max_slope_deg": 5.0,
-                "chokepoint_min_connectivity": 2,
-                "cover_min_width_m": 6.0,
-                "vehicle_route_max_slope_deg": 25.0,
-            },
-        }
-        return thresholds.get(self.baseline, thresholds[Template.ARMA_3])
+  
     
     def execute(self, input_data: LayerBundle) -> AnalyzedTerrain:
         """
@@ -161,7 +96,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         saddles = [f for f in features if isinstance(f, SaddleFeature)]
         flat_zones = [f for f in features if isinstance(f, FlatZoneFeature)]
         
-        # Apply semantic classification with game-specific thresholds
+        # Apply semantic classification
         self._classify_features_semantically(
             peaks, ridges, valleys, saddles, flat_zones,
             heightmap, slope, visibility, connectivity, flow_network
@@ -202,16 +137,13 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                                      connectivity: Dict,
                                      flow_network: Dict) -> None:
         """
-        Add semantic tags to features based on game-specific thresholds.
+        Add semantic tags to features.
         
         Uses relational graphs (visibility, connectivity, flow_network) to classify
         features according to the foundation document: Layer 5 consumes the graphs
         built by Layer 4 to produce tactical meaning.
         """
         cell_size = heightmap.config.horizontal_scale
-        
-        
-        thresholds = self._template_thresholds
         
         # store bounds + offset
         self.total_area_m2 = heightmap.shape[0] * heightmap.shape[1] * (cell_size ** 2)
@@ -238,10 +170,10 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             visible_count = len(visibility.get(peak.feature_id, []))
             
             # Defensive position scoring (requires visibility from peak)
-            if (peak.prominence >= thresholds["defensive_min_prominence_m"] and
-                peak.elevation_range[1] >= thresholds["defensive_min_elevation_m"] and
-                peak.avg_slope <= thresholds["defensive_max_slope_deg"] and
-                visible_count >= thresholds["defensive_min_visibility"]):
+            if (peak.prominence >= self.config.defensive_min_prominence_m and
+                peak.elevation_range[1] >= self.config.defensive_min_elevation_m and
+                peak.avg_slope <= self.config.defensive_max_slope_deg and
+                visible_count >= self.config.defensive_min_visibility):
                 
                 tags.append("defensive_position")
                 # Score based on prominence and visibility
@@ -252,8 +184,8 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
                 self._log(f"defensive post: visibility_count={visible_count}, score={defensive_score}")
             
             # Observation post (requires high visibility from peak)
-            if (peak.prominence >= thresholds["observation_min_prominence_m"] and
-                visible_count >= thresholds["observation_min_visibility"]):
+            if (peak.prominence >= self.config.observation_min_prominence_m and
+                visible_count >= self.config.observation_min_visibility):
                 tags.append("observation_post")
                 peak.metadata['visibility_count'] = visible_count
                 _score = min(1.0, visible_count / self.config.observation_visibility_divisor)
@@ -276,7 +208,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             tags = []
             width = ridge.metadata.get('width_meters', 0)
             
-            if width >= thresholds["cover_min_width_m"]:
+            if width >= self.config.cover_min_width_m:
                 tags.append("defensive_cover")
                 _score = min(1.0, width / self.config.cover_quality_width_divisor)
                 ridge.metadata['cover_quality'] = _score
@@ -313,7 +245,6 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             
             upstream_count = len(upstream_features)
             
-            # dynamic thresholds based on map size
             total_features = len(peaks) + len(ridges) + len(valleys) + len(saddles) + len(flat_zones)
             self.drainage_major_threshold = max(1, total_features // 100)  # Top 1% # MOVE TO CONFIG
             self.drainage_minor_threshold = max(1, total_features // 500)  # Top 0.2%  # MOVE TO CONFIG
@@ -372,7 +303,7 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             
             # Chokepoint requires at least 2 ridges (constriction) OR
             # combination of ridges and valleys that create a natural pass
-            if total_connections >= thresholds["chokepoint_min_connectivity"]:
+            if total_connections >= self.config.chokepoint_min_connectivity:
                 tags.append("chokepoint")
                 saddle.metadata['chokepoint_degree'] = total_connections
                 saddle.metadata['ridge_connections'] = ridge_count
@@ -404,8 +335,8 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             max_slope = flat.max_slope
             
             # Assembly area: large, flat zones suitable for staging
-            if (area_m2 >= thresholds["assembly_min_area_m2"] and
-                max_slope <= thresholds["assembly_max_slope_deg"]):
+            if (area_m2 >= self.config.assembly_min_area_m2 and
+                max_slope <= self.config.assembly_max_slope_deg):
                 
                 if area_m2 > self.config.assembly_major_area_threshold_m2:
                     tags.append("major_assembly_area")
@@ -472,7 +403,6 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
             }
         }
         
-        thresholds = self._get_template_thresholds()
         self._log("building index...")
         
         # --- Defensive Positions ---
@@ -658,28 +588,4 @@ class Layer5_Semantics(PipelineLayer[AnalyzedTerrain]):
         }
 
 
-# Vehicle profile for traversability analysis
-@dataclass
-class VehicleProfile:
-    """Define vehicle mobility characteristics for terrain analysis."""
-    name: str
-    max_slope_deg: float
-    max_water_depth_m: float = 0.0
-    width_m: float = 2.5
-    length_m: float = 5.0
-    
-    def can_traverse_slope(self, slope_deg: float) -> bool:
-        return slope_deg <= self.max_slope_deg
-    
-    def __repr__(self):
-        return f"VehicleProfile({self.name}, max_slope={self.max_slope_deg}°)"
 
-
-# Predefined vehicle profiles for supported games
-VEHICLE_PROFILES = {
-    'infantry': VehicleProfile('infantry', max_slope_deg=45.0, max_water_depth_m=0.5),
-    'light_wheeled': VehicleProfile('light_wheeled', max_slope_deg=25.0, max_water_depth_m=0.3),
-    'heavy_wheeled': VehicleProfile('heavy_wheeled', max_slope_deg=20.0, max_water_depth_m=0.5),
-    'tracked': VehicleProfile('tracked', max_slope_deg=35.0, max_water_depth_m=1.0),
-    'tank': VehicleProfile('tank', max_slope_deg=30.0, max_water_depth_m=1.5)
-}

@@ -48,7 +48,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         aspect = input_data.get('aspect', None)
 
         if slope is None or aspect is None:
-            self._log("Slope/aspect not provided, some feature refinement will be limited")
+            self._log("Slope/aspect not provided, feature refinement limited")
 
         self._log(f"Starting feature extraction | shape={heightmap.shape}, cell_size={heightmap.config.horizontal_scale:.4f}m")
         
@@ -169,14 +169,13 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         return arr == ctype.name
     
     def _extract_peaks(self, heightmap, curvature_type, gaussian_curvature,
-                   k_confidence, mean_curvature, slope) -> List[PeakFeature]:
+               k_confidence, mean_curvature, slope) -> List[PeakFeature]:
         """
         Extract peaks using regional maxima + curvature validation.
         
         For peak validation, we consider both CONVEX and CYLINDRICAL_CONVEX
         as "convex enough" because peak flanks are often cylindrical.
         """
-        
         from skimage import morphology
         from scipy import ndimage
 
@@ -197,6 +196,9 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         shoulder_radius_inner = max(2, int(self.config.peak_annular_inner_m / cell_size)) 
         shoulder_radius_outer = max(10, int(self.config.peak_annular_outer_m / cell_size)) 
 
+        # --- PATCH: hoist grid creation outside the candidate loop ---
+        y_grid, x_grid = np.ogrid[:z.shape[0], :z.shape[1]]
+
         validated_count = 0
         for i in range(1, num_candidates + 1):
             peak_pixels = np.argwhere(labeled_peaks == i)
@@ -205,15 +207,13 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
 
             centroid_y, centroid_x = peak_pixels.mean(axis=0).astype(int)
 
-            y, x = np.ogrid[:z.shape[0], :z.shape[1]]
-            dist = np.sqrt((x - centroid_x)**2 + (y - centroid_y)**2)
+            dist = np.sqrt((x_grid - centroid_x)**2 + (y_grid - centroid_y)**2)
             shoulder_mask = (dist >= shoulder_radius_inner) & (dist <= shoulder_radius_outer)
 
             shoulder_types = curvature_type[shoulder_mask]
             if len(shoulder_types) < 10:
                 continue
 
-            # Count both dome convex and cylindrical convex as "convex enough"
             convex_count = np.sum(
                 self._is_curvature(shoulder_types, CurvatureType.CONVEX) |
                 self._is_curvature(shoulder_types, CurvatureType.CYLINDRICAL_CONVEX)
@@ -291,7 +291,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             metadata={
                 'size': int(np.sum(mask)),
                 'elevation': elevation,
-                'confidence': float(prominence / 20.0),
+                'confidence': float(prominence / self.config.peak_confidence),
                 'defensive_rating': defensive_rating,
                 'detection_method': method,
                 'mean_curvature': float(mean_curvature[y, x]) if mean_curvature is not None else 0,
@@ -648,122 +648,163 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         points = np.column_stack([xs, ys]).astype(np.float32)
         n = len(points)
 
-        start_idx = 0
-        min_neighbours = n
-        cx, cy = np.mean(xs), np.mean(ys)
-        max_dist = -1
+        # use KDTree for all neighbour queries
+        from scipy.spatial import KDTree
+        tree = KDTree(points)
 
-        for i in range(n):
-            dists = np.sqrt(np.sum((points - points[i]) ** 2, axis=1))
-            neighbours = np.sum((dists > 0) & (dists <= 2.0))
-            if neighbours < min_neighbours:
-                min_neighbours = neighbours
-                start_idx = i
-            dist_from_centroid = (xs[i] - cx) ** 2 + (ys[i] - cy) ** 2
-            if dist_from_centroid > max_dist:
-                max_dist = dist_from_centroid
-                fallback_idx = i
+        # Find start point: prefer a skeleton endpoint (≤1 neighbour within 2px).
+        # query k=3 gives [self, nearest, 2nd nearest] — neighbour count = hits within r=2 minus self.
+        k_query = min(4, n)
+        dists, _ = tree.query(points, k=k_query)
+        # dists[:,0] is always 0.0 (self); count columns 1..k that are within 2.0
+        neighbour_counts = np.sum(dists[:, 1:] <= 2.0, axis=1)
 
-        if min_neighbours > 2:
-            start_idx = fallback_idx
+        min_neighbours = neighbour_counts.min()
+        if min_neighbours <= 2:
+            # True endpoint exists — pick the one with fewest neighbours
+            candidates = np.where(neighbour_counts == min_neighbours)[0]
+        else:
+            # No clean endpoint (closed loop / dense cluster) — fall back to
+            # the point furthest from the centroid
+            cx, cy = np.mean(xs), np.mean(ys)
+            dist_from_centroid = (xs - cx) ** 2 + (ys - cy) ** 2
+            candidates = np.array([np.argmax(dist_from_centroid)])
 
+        start_idx = int(candidates[0])
+
+        # Greedy nearest-neighbour walk using KDTree
         visited = np.zeros(n, dtype=bool)
         ordered_idx = [start_idx]
         visited[start_idx] = True
 
         for _ in range(n - 1):
             current = points[ordered_idx[-1]]
-            dists = np.sqrt(np.sum((points - current) ** 2, axis=1))
-            dists[visited] = np.inf
-            nearest = np.argmin(dists)
-            ordered_idx.append(nearest)
-            visited[nearest] = True
+            # Query enough neighbours to find the closest unvisited point.
+            # k=min(n,8) covers dense skeletons; fall back to full search if needed.
+            k_walk = min(n, 8)
+            _, idxs = tree.query(current, k=k_walk)
+            idxs = np.atleast_1d(idxs)
+            chosen = None
+            for idx in idxs:
+                if not visited[idx]:
+                    chosen = idx
+                    break
+            if chosen is None:
+                # All close neighbours visited — find globally nearest unvisited
+                unvisited = np.where(~visited)[0]
+                dists_uv = np.sum((points[unvisited] - current) ** 2, axis=1)
+                chosen = unvisited[np.argmin(dists_uv)]
+            ordered_idx.append(chosen)
+            visited[chosen] = True
 
         return [(int(xs[i]), int(ys[i])) for i in ordered_idx]
 
-    #def _find_connected_peaks(self, heightmap: Heightmap, spine_points: List[PixelCoord]) -> Set[str]:
-    #    """Find peak IDs connected to this ridge."""
-    #    
-    #    # TODO
-    #    return set()
-
-    #def _find_saddle_connections(self, heightmap: Heightmap, saddle_px: PixelCoord) -> Dict:
-    #    """Find ridges and valleys connected to saddle."""
-    #    
-    #    # TODO
-    #    return {'ridges': set(), 'valleys': set()}
-
-    #def _build_feature_hierarchy(self, features: List[TerrainFeature]) -> None:
-    #    """Build hierarchical relationships between features."""
-    #    
-    #    # TODO
-    #   pass
-    
-    
     def _build_feature_hierarchy(self, features: List[TerrainFeature]) -> None:
         """Build hierarchical relationships between features."""
+        from scipy.spatial import KDTree
+
         self._log('Build hierarchical relationships...')
-        # Separate by type
-        peaks = [f for f in features if isinstance(f, PeakFeature)]
-        ridges = [f for f in features if isinstance(f, RidgeFeature)]
+        peaks   = [f for f in features if isinstance(f, PeakFeature)]
+        ridges  = [f for f in features if isinstance(f, RidgeFeature)]
         valleys = [f for f in features if isinstance(f, ValleyFeature)]
         saddles = [f for f in features if isinstance(f, SaddleFeature)]
-        
-        # Connect ridges to peaks
+
+        # build spatial indices once over all spine points
+
+        # Peak centroid index
+        if peaks:
+            peak_coords  = np.array([p.centroid for p in peaks], dtype=np.float32)
+            peak_tree    = KDTree(peak_coords)
+        else:
+            peak_tree = None
+
+        # Ridge spine-point index: each entry maps back to its ridge feature_id
+        ridge_spine_coords = []
+        ridge_spine_ids    = []
         for ridge in ridges:
-            ridge.connected_peaks = self._find_connected_peaks(ridge.spine_points, peaks)
-        
+            for pt in ridge.spine_points:
+                ridge_spine_coords.append(pt)
+                ridge_spine_ids.append(ridge.feature_id)
+
+        if ridge_spine_coords:
+            ridge_tree = KDTree(np.array(ridge_spine_coords, dtype=np.float32))
+        else:
+            ridge_tree = None
+
+        # Valley spine-point index
+        valley_spine_coords = []
+        valley_spine_ids    = []
+        for valley in valleys:
+            for pt in valley.spine_points:
+                valley_spine_coords.append(pt)
+                valley_spine_ids.append(valley.feature_id)
+
+        if valley_spine_coords:
+            valley_tree = KDTree(np.array(valley_spine_coords, dtype=np.float32))
+        else:
+            valley_tree = None
+
+        # Connect ridges to peaks
+        tolerance = self.config.feature_connection_tolerance_px
+        for ridge in ridges:
+            ridge.connected_peaks = self._find_connected_peaks(
+                ridge.spine_points, peak_tree, peaks, tolerance
+            )
+
         # Connect saddles to ridges and valleys
         for saddle in saddles:
-            conn = self._find_saddle_connections(saddle.centroid, ridges, valleys)
-            saddle.connecting_ridges = conn['ridges']
-            saddle.connecting_valleys = conn['valleys']
-    
-    def _find_connected_peaks(self, spine_points: List[PixelCoord], peaks: List[PeakFeature]) -> Set[str]:
-        """Find peak IDs connected to this ridge."""
+            conn = self._find_saddle_connections(
+                saddle.centroid,
+                ridge_tree, ridge_spine_ids,
+                valley_tree, valley_spine_ids,
+                tolerance
+            )
+            saddle.connecting_ridges   = conn['ridges']
+            saddle.connecting_valleys  = conn['valleys']
+
+
+    def _find_connected_peaks(self, spine_points: List[PixelCoord],
+                               peak_tree, peaks: List[PeakFeature],
+                               tolerance: float) -> Set[str]:
+        """Find peak IDs connected to this ridge via endpoint proximity."""
         connected = set()
-        tolerance = self.config.feature_connection_tolerance_px
-        
-        if len(spine_points) < 2:
+
+        if len(spine_points) < 2 or peak_tree is None:
             return connected
-        
-        # Check endpoints of the ridge spine (first and last points)
-        endpoints = [spine_points[0], spine_points[-1]]
-        
-        for x, y in endpoints:
-            for peak in peaks:
-                px, py = peak.centroid
-                if abs(x - px) <= tolerance and abs(y - py) <= tolerance:
-                    connected.add(peak.feature_id)
-        
-        if len(connected) > 0:
+
+        endpoints = np.array([spine_points[0], spine_points[-1]], dtype=np.float32)
+        # query_ball_point returns all peaks within the tolerance radius
+        matches = peak_tree.query_ball_point(endpoints, r=tolerance)
+        for hit_list in matches:
+            for idx in hit_list:
+                connected.add(peaks[idx].feature_id)
+
+        if connected:
             self._log(f'found {len(connected)} peaks connected to ridge endpoint, tolerance={tolerance}')
-        
+
         return connected
 
+
     def _find_saddle_connections(self, saddle_px: PixelCoord,
-                                  ridges: List[RidgeFeature],
-                                  valleys: List[ValleyFeature]) -> Dict:
-        """Find ridges and valleys connected to saddle."""
-        sx, sy = saddle_px
-        tolerance = self.config.feature_connection_tolerance_px
+                                  ridge_tree, ridge_spine_ids: List[str],
+                                  valley_tree, valley_spine_ids: List[str],
+                                  tolerance: float) -> Dict:
+        """Find ridges and valleys connected to saddle via spatial index."""
         connections = {'ridges': set(), 'valleys': set()}
-        _track = 0
-        for ridge in ridges:
-            for rx, ry in ridge.spine_points:
-                if abs(sx - rx) <= tolerance and abs(sy - ry) <= tolerance:
-                    connections['ridges'].add(ridge.feature_id)
-                    _track +=1
-                    break
-        
-        for valley in valleys:
-            for vx, vy in valley.spine_points:
-                if abs(sx - vx) <= tolerance and abs(sy - vy) <= tolerance:
-                    connections['valleys'].add(valley.feature_id)
-                    _track +=1
-                    break
-        if _track > 0:
-            self._log(f'found {_track} ridges and valleys, PixelCoord[{sx,sy},tolerance={tolerance}]')
+        pt = np.array([saddle_px], dtype=np.float32)
+
+        if ridge_tree is not None:
+            for idx in ridge_tree.query_ball_point(pt[0], r=tolerance):
+                connections['ridges'].add(ridge_spine_ids[idx])
+
+        if valley_tree is not None:
+            for idx in valley_tree.query_ball_point(pt[0], r=tolerance):
+                connections['valleys'].add(valley_spine_ids[idx])
+
+        #total = len(connections['ridges']) + len(connections['valleys'])
+        #if total > 0:
+        #    self._log(f'found {total} connections at PixelCoord{saddle_px}, tolerance={tolerance}')
+
         return connections
     
     @property

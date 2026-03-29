@@ -1,5 +1,6 @@
 import numpy as np
-
+import os.path
+from pathlib import Path
 from enum import auto, Enum
 from typing import TypeAlias
 from typing import Dict, Any
@@ -9,6 +10,8 @@ from abc import ABC, abstractmethod
 from typing import Callable, Generic, TypeVar
 from dataclasses import dataclass, field, KW_ONLY
 from uuid import uuid4
+import hashlib
+import json
 
 #
 # TYPES - Primitive Contracts
@@ -54,64 +57,24 @@ class Traversability(Enum):
     def __str__(self):
         return self.name
 
-
-
-# Template Profiles
-class Template(Enum):
-    ARMA_2 = "ARMA_2"                   # Typical: 1-5m resolution
-    ARMA_3 = "ARMA_3"                   # Typical: 1-10m resolution  
-    WORLD_OF_TANKS = "WORLD OF TANKS"   # Vehicle-focused, 1-2m resolution
-    WAR_THUNDER = "WARTHUNDER"          # Mixed, 1-5m resolution
-    CUSTOM = "CUSTOM"
+#
+#  Vehicle profile
+#
 
 @dataclass
-class TScaling:
-    baseline: Template
-    horizontal_scale_m_per_px: float
-    vertical_scale_m_per_unit: float
-    vehicle_climb_angle_deg: float
-    infantry_climb_angle_deg: float
+class Vehicle:
+    """Vehicle mobility characteristics"""
+    name: str
+    max_slope_deg: float
+    max_water_depth_m: float = 0.0
+    width_m: float = 2.5
+    length_m: float = 5.0
     
-    @classmethod
-    def for_template(cls, _t: Template) -> 'TScaling':
-        presets = {
-            Template.ARMA_3: cls(
-                baseline=_t,
-                horizontal_scale_m_per_px=2.0,    # ArmA maps: 2-5m typical
-                vertical_scale_m_per_unit=0.2,    # 0.2m per grayscale unit
-                vehicle_climb_angle_deg=30.0,     # ArmA vehicles
-                infantry_climb_angle_deg=45.0     # Infantry can climb steeper
-            ),
-            Template.WORLD_OF_TANKS: cls(
-                baseline=_t,
-                horizontal_scale_m_per_px=1.0,    # WoT: detailed 1m resolution
-                vertical_scale_m_per_unit=0.1,    # 0.1m precision
-                vehicle_climb_angle_deg=25.0,     # Tanks have limits
-                infantry_climb_angle_deg=45.0
-            ),
-            Template.WAR_THUNDER: cls(
-                baseline=_t,
-                horizontal_scale_m_per_px=1.5,    # Mixed resolution
-                vertical_scale_m_per_unit=0.15,
-                vehicle_climb_angle_deg=30.0,
-                infantry_climb_angle_deg=45.0
-            ),
-            Template.ARMA_2: cls(
-                baseline=_t,
-                horizontal_scale_m_per_px=5.0,    # Older maps larger scale
-                vertical_scale_m_per_unit=0.25,
-                vehicle_climb_angle_deg=25.0,
-                infantry_climb_angle_deg=45.0
-            ),
-            Template.CUSTOM: cls(
-                baseline=_t,
-                horizontal_scale_m_per_px=2.0,    # Custom
-                vertical_scale_m_per_unit=0.25,
-                vehicle_climb_angle_deg=25.0,
-                infantry_climb_angle_deg=45.0
-            )
-        }
-        return presets.get(_t, presets[Template.ARMA_3])
+    def can_traverse_slope(self, slope_deg: float) -> bool:
+        return slope_deg <= self.max_slope_deg
+    
+    def __repr__(self):
+        return f"Vehicle({self.name}, max_slope={self.max_slope_deg}°)"
 
 # =========================================================================
 #  MASTER PIPELINE CONFIG
@@ -171,12 +134,13 @@ class PipelineConfig:
     # =========================================================================
     
     # --- Peaks (local maxima with convex surroundings) ---
+    peak_confidence : float = 20.0              # [0-50] Peak confidence
     min_peak_size_px: int = 1                   # [1-10] pixels, minimum peak footprint
     peak_min_prominence_m: float = 5.0          # [1-50] meters, minimum height above saddle
-    peak_nms_radius_px: int = 15                # [5-30] pixels, non-maximum suppression radius
-    peak_shoulder_convex_ratio: float = 0.05    # [0.01-0.3] convex pixels in annular ring
+    peak_nms_radius_px: int = 25                # [5-30] pixels, non-maximum suppression radius
+    peak_shoulder_convex_ratio: float = 0.18    # [0.01-0.3] convex pixels in annular ring
     peak_annular_inner_m: float = 5.0           # [2-15] meters, inner shoulder radius
-    peak_annular_outer_m: float = 12.0          # [5-25] meters, outer shoulder radius
+    peak_annular_outer_m: float = 20.0          # [5-25] meters, outer shoulder radius
     peak_smooth_sigma: float = 1.5              # ndimage.gaussian_filter(z, sigma)
     
     # --- Ridges & Valleys (linear features) ---
@@ -185,10 +149,10 @@ class PipelineConfig:
     
     # --- Flat Zones (traversable areas) ---
     min_flat_zone_size_px: int = 450            # [50-500] pixels, minimum flat area
-    flat_zone_slope_threshold_deg: float = 3.0  # [1-10] degrees, max slope for "flat"
+    flat_zone_slope_threshold_deg: float = 4.0  # [1-10] degrees, max slope for "flat"
     
     # --- Saddles (passes between peaks) ---
-    saddle_k_min_threshold: float = 0.00020     # [1e-6-1e-2] minimum |K| for saddle (1/m²)
+    saddle_k_min_threshold: float = 0.00050     # [1e-6-1e-2] minimum |K| for saddle (1/m²)
     saddle_confidence_threshold: float = 1.0    # [0.0-1.0] normalized confidence (1.0 = all)
 
     # --- Sea Level ---
@@ -198,7 +162,7 @@ class PipelineConfig:
     # --- General Topology ---
     border_margin_px: int = 10                   # [5-30] pixels, ignore edges
     prominence_search_radius_m: float = 100.0    # [50-500] meters, search radius for prominence
-    feature_connection_tolerance_px: float = 5.0 # [1-10] connection tolerance (T pixels at (Template)m/px = N meters)
+    feature_connection_tolerance_px: float = 10.0 # [1-10] connection tolerance (T pixels at (Template)m/px = N meters)
     
     
     # =========================================================================
@@ -207,8 +171,8 @@ class PipelineConfig:
     
     
     # --- Visibility ---
-    visibility_max_range_m: float = 750.0      # [200-3000] meters, max line-of-sight distance
-    viewshed_sample_step_px: int = 8            # [1-50] pixels, step size for ray casting (performance)
+    visibility_max_range_m: float = 1000.0      # [200-3000] meters, max line-of-sight distance
+    viewshed_sample_step_px: int = 6            # [1-50] pixels, step size for ray casting (performance)
     visibility_sample_radius: int = 5           # [3-15] pixels, sampling radius for viewshed
     visibility_epsilon_m: float = 0.1           # [0.05-0.5] meters, line-of-sight precision
     
@@ -233,8 +197,6 @@ class PipelineConfig:
     # =========================================================================
     # LAYER 5: SEMANTICS
     # =========================================================================
-    
-    baseline: Template = Template.ARMA_3       # [ARMA_2/ARMA_3/WAR_THUNDER/WORLD_OF_TANKS/CUSTOM]
     max_feature_coverage: float = 0.5           # Max 50% of map for any single feature
     
     # --- Defensive Positions ---
@@ -280,35 +242,23 @@ class PipelineConfig:
     trafficability_ideal_threshold_deg: float = 5.0    # [3-10] degrees
     trafficability_good_threshold_deg: float = 15.0    # [10-25] degrees
     
-    # THIS NEEDS EVALUATION
-    analysis_scales: Dict[str, int] = field(default_factory=lambda: {
-        "micro": 3,     # [1-5] pixels, noise/small rocks
-        "meso": 15,     # [10-30] pixels, gullies/ridges
-        "macro": 50     # [30-100] pixels, mountains/valleys
-    })
+    
+    # Vehicle profiles
+    VEHICLE_PROFILES = {
+        'infantry'      : Vehicle('human', max_slope_deg=45.0, max_water_depth_m=0.5),
+        'light_wheeled' : Vehicle('car', max_slope_deg=25.0, max_water_depth_m=0.3),
+        'heavy_wheeled' : Vehicle('offroad', max_slope_deg=20.0, max_water_depth_m=0.5),
+        'tracked'       : Vehicle('army light', max_slope_deg=35.0, max_water_depth_m=1.0),
+        'tank'          : Vehicle('army heavy', max_slope_deg=30.0, max_water_depth_m=1.5)
+    }
     
     # =========================================================================
     # RUNTIME
     # =========================================================================
     
     verbose: bool = True                        # [True/False] enable debug logging
+    cache_dir: str = 'cache'                    # [folder] cache data
    
-    # visualizer settings
-    visualization_style: str = "gis"           # "gis", "game", "military", "orienteering"
-    visualization_dpi: int = 150               # [72-300] output resolution
-    visualization_show_grid: bool = True       # [True/False] show coordinate grid
-    visualization_show_legend: bool = True     # [True/False] show legend
-    visualization_base_alpha: float = 0.7      # [0.3-1.0] base terrain transparency
-    
-    # Overlays: "strategic", "tactical", "logistical", "hydro", "quality", "all", "none"
-    visualization_overlays: List[str] = field(default_factory=lambda: ["strategic"]) 
-
-    # GIS-specific
-    gis_show_elevation_tint: bool = True       # [True/False] add elevation color tint
-    
-    # To be implemented
-    save_intermediates: bool = False            # [True/False] save intermediate files 
-    
     # =========================================================================
     # Extensions
     # =========================================================================
@@ -319,7 +269,7 @@ class PipelineConfig:
         elif slope_degrees > self.vehicle_climb_angle:
             return Traversability.DIFFICULT
         return Traversability.FREE
-    
+        
 #
 #  Immutable Data Containers
 #
@@ -342,8 +292,9 @@ class RawImageInput:
     Allows for flexible input sources while maintaining type safety.
     """
     data: np.ndarray  # 2D array of uint8 (0-255) grayscale values
-    metadata: Optional[dict] = None  # Optional: georeferencing, units, etc.
+    metadata: Optional[dict] = None
     
+    # Helpers
     def validate(self) -> bool:
         """Validate input data format."""
         # explicitly convert all checks to Python bool (not numpy.bool_)
@@ -356,6 +307,17 @@ class RawImageInput:
         if not bool(np.isfinite(self.data).all()):
             return False
         return True
+
+    def get_hash(self) -> str:
+        """Generate deterministic hash of the input data."""
+        data_hash = hashlib.sha256(self.data.tobytes()).hexdigest()
+        if self.metadata:
+            meta_str = json.dumps(self.metadata, sort_keys=True)
+            meta_hash = hashlib.sha256(meta_str.encode()).hexdigest()
+            combined = data_hash + meta_hash
+        else:
+            combined = data_hash
+        return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 @dataclass(frozen=True)
 class Heightmap:
@@ -713,8 +675,70 @@ class AnalyzedTerrain:
               type=PeakFeature,
               min_prominence=50.0,
               visibility_coverage={"capture_point_A": 0.7},
-              traversable_by=VehicleProfile(tank=True)
+              traversable_by=Vehicle(tank=True)
           )
         """
         pass
         
+        
+# ----------------------------------------------------
+#   Auto cache mechanic
+#   Supports: layer 0,1 and 3 
+# ----------------------------------------------------
+
+class Datacache:
+    """
+    Per-layer cache manager
+    
+    Each layer gets its own cache directory and manages its own entries.
+    Handles the dual-file pattern (JSON metadata + NPY arrays).
+    * Avoid complex (nested) types, break them down or store as (NPY) binary.
+    * Make sure the 'name' tags corresponds with filename identifiers.
+    """
+    
+    def __init__(self, layer_name: str, cache_dir: str = "cache"):
+        self.layer_name = layer_name
+        self.cache_dir = Path(cache_dir)
+        
+    def _ensure_dir(self):
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    def make_key(self, *hashes: str) -> str:
+        """Combine multiple hash strings into a single cache key."""
+        combined = "".join(hashes)
+        combined_sum = hashlib.sha256(combined.encode()).hexdigest()[:16]
+        print(f'[cache] hashing: {combined_sum }')
+        return combined_sum 
+    
+    def exists(self, cache_id: str, name: str, extension: str) -> bool:
+        """Check if a cache file exists."""
+        file_path = self.cache_dir / f"{cache_id}.{self.layer_name}.{name}.{extension}"
+        file_exists = file_path.exists()
+        print(f'[cache] seek: {file_path}, exists={file_exists}')
+        return file_exists
+    
+    def save_json(self, cache_id: str, name: str, data: dict) -> None:
+        """Save metadata as JSON."""
+        self._ensure_dir()
+        path = self.cache_dir / f"{cache_id}.{self.layer_name}.{name}.json"
+        print(f'[cache] writing: {path}...')
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=2)
+    
+    def load_json(self, cache_id: str, name: str) -> dict:
+        """Load metadata JSON."""
+        path = self.cache_dir / f"{cache_id}.{self.layer_name}.{name}.json"
+        print(f'[cache] reading: {path}...')
+        with open(path, 'r') as f:
+            return json.load(f)
+    
+    def save_array(self, cache_id: str, name: str, array: np.ndarray) -> None:
+        """Save numpy array as NPY file."""
+        self._ensure_dir()
+        path = self.cache_dir / f"{cache_id}.{self.layer_name}.{name}.npy"
+        np.save(path, array)
+    
+    def load_array(self, cache_id: str, name: str) -> np.ndarray:
+        """Load numpy array from NPY file."""
+        path = self.cache_dir / f"{cache_id}.{self.layer_name}.{name}.npy"
+        return np.load(path)
