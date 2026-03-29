@@ -23,7 +23,8 @@ Compare detected output features against ground truth will calibrate our model, 
 
 # Early Testing
 
-<img width="1024" src="https://github.com/user-attachments/assets/9d2c82ba-958d-4779-8c07-94e260057eff" />
+<img width="1024" src="https://github.com/user-attachments/assets/4ba4be03-a5b1-4ab7-9219-6e6bb7b93947" />
+
 
 ---
 
