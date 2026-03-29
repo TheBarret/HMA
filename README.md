@@ -10,9 +10,7 @@ The plan of attack is to generate `Ground Truth Validation` using `synthetic ter
 
 Compare detected output features against ground truth will calibrate our model, using predefined config parameters located `core.py`.  
 
-## License
-
-Open source, for the world to use how they see fit with the promise it be legal.
+<img width="1024" src="https://github.com/user-attachments/assets/d0a403b5-128b-448f-9a8c-346ef5fc9089" />
 
 ## Pipeline Architecture
 
@@ -111,3 +109,6 @@ Or a `Near zero` one direction flat can be a Ridge (curved across, flat along), 
 - **Output:** Domain-classified terrain (tactical map, accessibility zones)
 
 
+## License
+
+Open source, for the world to use how they see fit with the promise it be legal.
