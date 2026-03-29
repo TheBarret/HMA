@@ -13,6 +13,41 @@ Compare detected output features against ground truth will calibrate our model, 
 
 <img width="400" src="https://github.com/user-attachments/assets/d0a403b5-128b-448f-9a8c-346ef5fc9089" /><img width="380" src="https://github.com/user-attachments/assets/6a75743e-2ca6-422e-9423-c49e607d0f88" />
 
+# LLM Friendly context summary
+
+```
+==================================================
+TERRAIN CONTEXT REPORT T_SADDLE.PNG
+==================================================
+
+[L0] CALIBRATION SURFACE
+--------------------------------------------------
+The calibrated surface covers 256m × 256m (0.07 km²) at 2.0m/pixel resolution.
+Elevation ranges from 0.2m to 1016.2m (Δ1016.0m), with a median of 0.2m.
+The terrain is extreme (> 500m relief) and highland-dominant (significant upper elevation mass).
+Approximately 26% of the map is above the 0.2m sea-level reference.
+
+
+  • Map extent: 256m × 256m (0.07 km²)
+  • Cell resolution: 2.0m/pixel  |  Grid: 128×128 px
+  • Elevation span: 0.2m → 1016.2m  (Δ1016.0m)
+  • Median elevation: 0.2m  |  Mean: 90.4m  |  σ: 215.3m
+  • Land coverage: 26.4%  |  Sea/below-reference: 73.6%
+  • Relief character: extreme (> 500m relief)
+  • Hypsometric character: highland-dominant (significant upper elevation mass)
+  • Elevation quartiles: P25=0.2m  P50=0.2m  P75=0.2m  P90=455.8m
+  • Quadrant means: NW(86m avg)  NE(89m avg)  SW(92m avg)  SE(95m avg)
+
+——————————————————————————————————————————————————
+
+[L1] SLOPE & ASPECT
+--------------------------------------------------
+Surface slopes average 19.2°, with 23% exceeding 15°. The terrain is generally gentle, highly traversable. N-facing slopes dominate the aspect distribution.
+
+  • Average slope: 19.2° ± 35.4° (max: 88.7°)
+  • Slope distribution: 76% flat, 0% moderate, 23% steep
+  • Dominant aspect: N-facing slopes
+```
 
 # Early Testing
 
