@@ -4,27 +4,15 @@
 A heightmap is a 2.5D scalar field: perfect geometric surface information, zero information about what lies above, 
 below, or what the surface means. Analysis must proceed from fundamental mathematics to derived semantics.
 
-The plan of attack is to generate `Ground Truth Validation` using `synthetic terrain`  to generate heightmaps with known features.  
+The pipeline architecture and calibrating is done by generate `Ground Truth Validation`,  
+using `synthetic terrain`  to generate heightmaps with known features.  
 
 <img src="t_flatzone.png" /> <img src="t_single_peak.png" /> <img src="t_ridge.png" /> <img src="t_saddle.png" />
 
 Compare detected output features against ground truth will calibrate our model, using predefined config parameters located `core.py`.  
 
-<img width="1024" src="https://github.com/user-attachments/assets/d0a403b5-128b-448f-9a8c-346ef5fc9089" />
+<img width="450" src="https://github.com/user-attachments/assets/d0a403b5-128b-448f-9a8c-346ef5fc9089" /><img width="425" src="https://github.com/user-attachments/assets/6a75743e-2ca6-422e-9423-c49e607d0f88" />
 
-## Pipeline Architecture
-
-<img width="1024" src="https://github.com/user-attachments/assets/6a75743e-2ca6-422e-9423-c49e607d0f88" />
-
-
-| Layer | Name | Output | Key Parameters | Dependencies |
-|:-----:|------|--------|----------------|--------------|
-| **0** | **Calibration** | Clean Surface | `h_scale=2.0 m/px`<br/>`v_scale=0.2 m/unit`<br/>`noise_sigma=2.0` | Raw heightmap |
-| **1** | **Local Geometry** | Slope (0-90°)<br/>Aspect (0-360°) | `gradient_method=central`<br/>`flat_threshold=0.5°` | Layer 0 |
-| **2** | **Regional Geometry** | Mean Curvature H<br/>Gaussian Curvature K<br/>6-Type Classification | `H_eps_min=1e-4`<br/>`K_eps_min=1e-5`<br/>`adaptive=True` | Layer 1 |
-| **3** | **Topology** | Peaks ▲<br/>Ridges ━<br/>Valleys ━<br/>Saddles ●<br/>Flat Zones ■ | `peak_prominence=2m`<br/>`ridge_length=6px`<br/>`saddle_K=2e-4`<br/>`flat_slope=3°` | Layer 2 |
-| **4** | **Relational** | Visibility Graph<br/>Flow Network<br/>Connectivity Graph | `vis_range=1200m`<br/>`conn_radius=200m`<br/>`flow_step=10px` | Layer 3 |
-| **5** | **Semantics** | Defensive Positions<br/>Observation Points<br/>Assembly Areas<br/>Chokepoints | `def_prominence=8m`<br/>`obs_visibility=10`<br/>`assembly_area=2000m²` | Layer 4 |
 
 # Early Testing
 
