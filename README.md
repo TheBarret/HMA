@@ -6,7 +6,7 @@ below, or what the surface means. Analysis must proceed from fundamental mathema
 
 The plan of attack is to generate `Ground Truth Validation` using `synthetic terrain`  to generate heightmaps with known features.  
 
-<img src="t_flatzone.png" /><img src="t_single_peak.png" /><img src="t_ridge.png" /><img src="t_saddle.png" />
+<img src="t_flatzone.png" /> <img src="t_single_peak.png" /> <img src="t_ridge.png" /> <img src="t_saddle.png" />
 
 Compare detected output features against ground truth will calibrate our model, using predefined config parameters located `core.py`.  
 
@@ -25,30 +25,7 @@ Compare detected output features against ground truth will calibrate our model, 
 
 <img width="1024" src="https://github.com/user-attachments/assets/9d2c82ba-958d-4779-8c07-94e260057eff" />
 
-command-line: `python run.py <heightmap> --style military --overlays none --output output.png`
-
-<img width="1024" src="https://github.com/user-attachments/assets/82fd9642-4742-4fc0-8d91-6d34f226f2be" />
-
-command-line: `python run.py <heightmap> --style gis --overlays all --output output.png`
-
-```
-  python analyse.py map.png
-  python analyse.py map.png --style game
-  python analyse.py map.png --style gis --overlays strategic tactical
-  python analyse.py map.png --style military --overlays all --output military_map.png
-  python analyse.py map.png --style orienteering --overlays none
- ```
-
-Overlay Types:
-  - strategic: Defensive positions, observation posts
-  - tactical: Chokepoints, ambush zones, cover ridges
-  - logistical: Assembly areas, vehicle routes
-  - hydro: Drainage networks, valley types
-  - quality: Quality metrics (defensive scores, cover quality)
-  - all: All overlays
-  - none: Terrain only
-
-*REMARK: ONLY GIS STYLE HAS OVERLAYS ATM!*
+---
 
 ## The Analysis Pipeline
 
