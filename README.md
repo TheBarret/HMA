@@ -16,6 +16,9 @@ Open source, for the world to use how they see fit with the promise it be legal.
 
 ## Pipeline Architecture
 
+<img width="1024" src="https://github.com/user-attachments/assets/6a75743e-2ca6-422e-9423-c49e607d0f88" />
+
+
 | Layer | Name | Output | Key Parameters | Dependencies |
 |:-----:|------|--------|----------------|--------------|
 | **0** | **Calibration** | Clean Surface | `h_scale=2.0 m/px`<br/>`v_scale=0.2 m/unit`<br/>`noise_sigma=2.0` | Raw heightmap |
