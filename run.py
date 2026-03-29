@@ -9,7 +9,8 @@ from rgeometry import Layer2_RegionalGeometry
 from topological import Layer3_TopologicalFeatures
 from relational import Layer4_Relational
 from semantics import Layer5_Semantics
-
+from visualizer import render
+from context import TerrainContext
 
 """
     HMA Staging script (testrig)
@@ -47,22 +48,41 @@ def run_pipeline(png_path: str, config: PipelineConfig) -> Dict:
     features = layer3.execute(bundle)
     bundle['features'] = features
     
+    context = TerrainContext(config)
+    context.ingest_layer0(heightmap)
+    context.ingest_layer1(slope_aspect['slope'], slope_aspect['aspect'])
+    print(context.describe())
+    
+    
+    # Visualize
+    map_name = Path(png_path).stem
+    render(
+        bundle=bundle,
+        features=features,
+        map_name=map_name,
+        save_path=f"{map_name}_topology.png",
+        dpi=180
+    )
+    #return {'heightmap': heightmap, 'features': features}
+    
     # Layer 4
-    layer4 = Layer4_Relational(config)
-    relational = layer4.execute(bundle)
-    bundle.update(relational)
+    #layer4 = Layer4_Relational(config)
+    #relational = layer4.execute(bundle)
+    #bundle.update(relational)
     
     # Layer 5
-    layer5 = Layer5_Semantics(config)
-    analyzed = layer5.execute(bundle)
+    #layer5 = Layer5_Semantics(config)
+    #analyzed = layer5.execute(bundle)
     
-    return {
-        'heightmap': heightmap.data,
-        'features': features,
-        'relational': relational,
-        'analyzed': analyzed,
-        'semantic_index': analyzed.semantic_index,
-    }
+    #return {
+    #   'heightmap': heightmap.data,
+    #   'features': features,
+    #   'relational': relational,
+    #   'analyzed': analyzed,
+    #   'semantic_index': analyzed.semantic_index,
+    #}
+    return
+    
 
 
 
@@ -74,7 +94,7 @@ def main():
     # Setup config
     config = PipelineConfig()
     config.verbose = True
-    run_pipeline('.//assets//3point.png', config)
+    run_pipeline('./assets/t_saddle.png', config)
 
 
 # =============================================================================

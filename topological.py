@@ -7,7 +7,6 @@ from scipy.ndimage import label, find_objects, maximum_filter, minimum_filter
 from skimage.morphology import skeletonize, remove_small_objects
 from typing import List, Dict, Tuple, Set, Optional, Any
 from dataclasses import field
-from uuid import uuid4
 
 from core import (
     Heightmap, ScalarField, PipelineConfig, PipelineLayer,
@@ -291,7 +290,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             metadata={
                 'size': int(np.sum(mask)),
                 'elevation': elevation,
-                'confidence': float(prominence / self.config.peak_confidence),
+                'confidence': float(min(1.0, prominence / self.config.peak_confidence)),
                 'defensive_rating': defensive_rating,
                 'detection_method': method,
                 'mean_curvature': float(mean_curvature[y, x]) if mean_curvature is not None else 0,
@@ -515,6 +514,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         # Apply both thresholds
         k_threshold = self.config.saddle_k_min_threshold
         confidence_threshold = self.config.saddle_confidence_threshold
+        self._log(f"Saddle parameters: k_threshold={k_threshold:.2e}, confidence_threshold={confidence_threshold:.2f}")
         
         if len(final_k) > 0:
             self._log(f"Saddle statistics: K min={np.min(final_k):.2e}, K max={np.max(final_k):.2e}, "
@@ -546,7 +546,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             saddles.append(saddle)
             validated_count += 1
         
-        self._log(f"Saddle parameters: k_threshold={k_threshold:.2e}, confidence_threshold={confidence_threshold:.2f}")
         return saddles
 
     def _extract_flat_zones(self, heightmap: Heightmap, curvature_type: np.ndarray,
@@ -703,7 +702,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         """Build hierarchical relationships between features."""
         from scipy.spatial import KDTree
 
-        self._log('Build hierarchical relationships...')
+        self._log('Building feature hierarchy...')
         peaks   = [f for f in features if isinstance(f, PeakFeature)]
         ridges  = [f for f in features if isinstance(f, RidgeFeature)]
         valleys = [f for f in features if isinstance(f, ValleyFeature)]
@@ -813,4 +812,4 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             "type": "List[TerrainFeature]",
             "feature_types": ["PeakFeature", "RidgeFeature", "ValleyFeature", "SaddleFeature", "FlatZoneFeature"],
             "geometry": "points and polylines in PixelCoord space"
-        }
+        }   
