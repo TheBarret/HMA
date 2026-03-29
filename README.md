@@ -10,6 +10,10 @@ The plan of attack is to generate `Ground Truth Validation` using `synthetic ter
 
 Compare detected output features against ground truth will calibrate our model, using predefined config parameters located `core.py`.  
 
+## License
+
+Open source, for the world to use how they see fit with the promise it be legal.
+
 ## Pipeline Architecture
 
 | Layer | Name | Output | Key Parameters | Dependencies |
