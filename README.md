@@ -13,40 +13,51 @@ Compare detected output features against ground truth will calibrate our model, 
 
 <img width="400" src="https://github.com/user-attachments/assets/133cddbf-0c8c-488f-9b9d-3eeb8feea246" /><img width="380" src="https://github.com/user-attachments/assets/6a75743e-2ca6-422e-9423-c49e607d0f88" />
 
-# LLM Friendly context summary
+# LLM Friendly context summary (WIP)
+
+The pipeline comes with a `context` module that will wrap arround the data and contextualizes it,  
+where the idea is that you can `query` the context:  
+
+`context.question("Where can I set up an observation post?")`  
+
+
+# Example output of `t_saddle.png`
 
 ```
 ==================================================
-TERRAIN CONTEXT REPORT T_SADDLE.PNG
+TERRAIN CONTEXT REPORT
 ==================================================
 
 [L0] CALIBRATION SURFACE
 --------------------------------------------------
 The calibrated surface covers 256m × 256m (0.07 km²) at 2.0m/pixel resolution.
-Elevation ranges from 0.2m to 1016.2m (Δ1016.0m), with a median of 0.2m.
-The terrain is extreme (> 500m relief) and highland-dominant (significant upper elevation mass).
-Approximately 26% of the map is above the 0.2m sea-level reference.
+Elevation ranges from 0.1m to 99.7m (Δ99.6m), with a median of 0.1m.
+The terrain is moderate (50–150m relief) and highland-dominant (significant upper elevation mass).
+Approximately 26% of the map is above the 0.1m sea-level reference.
 
 
   • Map extent: 256m × 256m (0.07 km²)
   • Cell resolution: 2.0m/pixel  |  Grid: 128×128 px
-  • Elevation span: 0.2m → 1016.2m  (Δ1016.0m)
-  • Median elevation: 0.2m  |  Mean: 90.4m  |  σ: 215.3m
+  • Elevation span: 0.1m → 99.7m  (Δ99.6m)
+  • Median elevation: 0.1m  |  Mean: 8.9m  |  σ: 21.1m
   • Land coverage: 26.4%  |  Sea/below-reference: 73.6%
-  • Relief character: extreme (> 500m relief)
+  • Relief character: moderate (50–150m relief)
   • Hypsometric character: highland-dominant (significant upper elevation mass)
-  • Elevation quartiles: P25=0.2m  P50=0.2m  P75=0.2m  P90=455.8m
-  • Quadrant means: NW(86m avg)  NE(89m avg)  SW(92m avg)  SE(95m avg)
+  • Elevation quartiles: P25=0.1m  P50=0.1m  P75=0.1m  P90=44.8m
+  • Quadrant means: NW(8m avg)  NE(9m avg)  SW(9m avg)  SE(9m avg)
 
 ——————————————————————————————————————————————————
 
 [L1] SLOPE & ASPECT
 --------------------------------------------------
-Surface slopes average 19.2°, with 23% exceeding 15°. The terrain is generally gentle, highly traversable. N-facing slopes dominate the aspect distribution.
+Surface slopes average 12.7°, with 21% exceeding 15°.
+The terrain is generally gentle, highly traversable.
+N-facing slopes dominate the aspect distribution.
 
-  • Average slope: 19.2° ± 35.4° (max: 88.7°)
-  • Slope distribution: 76% flat, 0% moderate, 23% steep
+  • Average slope: 12.7° ± 25.1° (max: 77.1°)
+  • Slope distribution: 78% flat, 1% moderate, 21% steep
   • Dominant aspect: N-facing slopes
+[Visualizer] Saved → t_saddle_topology.png
 ```
 
 # Early Testing
