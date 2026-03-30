@@ -90,8 +90,8 @@ class PipelineConfig:
     # =========================================================================
     
     horizontal_scale: float = 2.0           # [0.5-10.0] meters per pixel
-    vertical_scale: float = 4.0             # [0.05-1.0] meters per grayscale unit
-    sea_level_offset: float = 0.2          # [0-100] meters, base elevation
+    vertical_scale: float = 0.392             # [0.05-1.0] meters per grayscale unit
+    sea_level_offset: float = 0.1          # [0-100] meters, base elevation
     noise_reduction_sigma: float = 1.0      # [0.5-5.0] Gaussian blur strength
     max_elevation_range: int = 10000        # max elevation bounds [10km range]
     histogram_bins: int = 50                # histogram quantizing pool
@@ -120,11 +120,11 @@ class PipelineConfig:
     #    Rolling Hills	 |  60-70               | Moderate features, need sensitivity
     #    Sparse Features |  50-60               | Isolated ridges/valleys on flat terrain (default)
     #    Urban/Man-made  |  80-90               | Sharp edges dominate, filter out noise
-    adaptive_percentile: float = 45.0
+    adaptive_percentile: float = 62.0
     
     # prevent over-deflation
     curvature_epsilon_h_min: float = 0.00005     # [1e-6-1e-2] minimum mean curvature (1/m)
-    curvature_epsilon_k_min: float = 0.000005    # [1e-7-1e-3] minimum Gaussian curvature (1/m²)
+    curvature_epsilon_k_min: float = 0.00002    # [1e-7-1e-3] minimum Gaussian curvature (1/m²)
     
     # prevent over-inflation
     curvature_epsilon_h_max: float = 0.05       # [0.01-0.2] maximum mean curvature threshold (1/m)
@@ -137,24 +137,24 @@ class PipelineConfig:
     # --- Peaks (local maxima with convex surroundings) ---
     peak_confidence : float = 20.0              # [0-50] Peak confidence
     min_peak_size_px: int = 1                   # [1-10] pixels, minimum peak footprint
-    peak_min_prominence_m: float = 5.0          # [1-50] meters, minimum height above saddle
-    peak_nms_radius_px: int = 25                # [5-30] pixels, non-maximum suppression radius
-    peak_shoulder_convex_ratio: float = 0.18    # [0.01-0.3] convex pixels in annular ring
-    peak_annular_inner_m: float = 5.0           # [2-15] meters, inner shoulder radius
-    peak_annular_outer_m: float = 20.0          # [5-25] meters, outer shoulder radius
-    peak_smooth_sigma: float = 1.5              # ndimage.gaussian_filter(z, sigma)
+    peak_min_prominence_m: float = 10.0          # [1-50] meters, minimum height above saddle
+    peak_nms_radius_px: int = 100               # [1-100] pixels, non-maximum suppression radius
+    peak_shoulder_convex_ratio: float = 0.12    # [0.01-0.3] n% convex pixels in annular ring
+    peak_annular_inner_m: float = 2.0           # [2-15] meters, inner shoulder radius
+    peak_annular_outer_m: float = 40.0          # [1-50] meters, outer shoulder radius
+    peak_smooth_sigma: float = 2.5              # ndimage.gaussian_filter(z, sigma)
     
     # --- Ridges & Valleys (linear features) ---
-    min_ridge_length_px: int = 10                # [3-20] pixels, minimum ridge length
-    min_valley_length_px: int = 10               # [3-20] pixels, minimum valley length
+    min_ridge_length_px: int = 15                # [3-20] pixels, minimum ridge length
+    min_valley_length_px: int = 15               # [3-20] pixels, minimum valley length
     
     # --- Flat Zones (traversable areas) ---
-    min_flat_zone_size_px: int = 450            # [50-500] pixels, minimum flat area
+    min_flat_zone_size_px: int = 150            # [50-500] pixels, minimum flat area
     flat_zone_slope_threshold_deg: float = 4.0  # [1-10] degrees, max slope for "flat"
     
     # --- Saddles (passes between peaks) ---
-    saddle_k_min_threshold: float = 0.00050     # [1e-6-1e-2] minimum |K| for saddle (1/m²)
-    saddle_confidence_threshold: float = 1.0    # [0.0-1.0] normalized confidence (1.0 = all)
+    saddle_k_min_threshold: float = 0.00020     # [2.00e-4/m²] minimum |K| for saddle (1/m²)
+    saddle_confidence_threshold: float = 0.65    # [0.0-1.0] normalized confidence (1.0 = all)
 
     # --- Sea Level ---
     exclude_below_reference: bool = True         # [True/False] exclude sea domain features
@@ -162,7 +162,7 @@ class PipelineConfig:
         
     # --- General Topology ---
     border_margin_px: int = 10                   # [5-30] pixels, ignore edges
-    prominence_search_radius_m: float = 100.0    # [50-500] meters, search radius for prominence
+    prominence_search_radius_m: float = 250.0    # [50-500] meters, search radius for prominence
     feature_connection_tolerance_px: float = 10.0 # [1-10] connection tolerance (T pixels at (Template)m/px = N meters)
     
     
@@ -656,7 +656,7 @@ class AnalyzedTerrain:
     # LLM-FRIENDLY PRE-COMPUTED DATA
     # =========================================================================
     
-    # Natural language context (generated after pipeline, or by Layer 5)
+    # Natural language context (after pipeline, semantics)
     terrain_narrative: str = ""
     region_descriptions: Dict[str, str] = field(default_factory=dict)  # "north": "steep mountainous terrain"
     feature_descriptions: Dict[str, str] = field(default_factory=dict)  # feature_id → human description
@@ -675,7 +675,7 @@ class AnalyzedTerrain:
     _index_built: bool = field(default=False, init=False, repr=False)
     
     # =========================================================================
-    # QUERY INTERFACE (Implementation)
+    # QUERY INTERFACE
     # =========================================================================
     
     def find_by_type(self, feature_type: type) -> List[ClassifiedFeature]:
