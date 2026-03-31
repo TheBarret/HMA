@@ -25,8 +25,8 @@ Relations are derived from continuous mathematical fields, onto which features a
 3. Map Discrete Features (Semantics)  
    - Assign Features to Basins, Build Feature Graphs  
 
-<img width="380" src="https://github.com/user-attachments/assets/4ba4be03-a5b1-4ab7-9219-6e6bb7b93947" /> <img width="380" src="https://github.com/user-attachments/assets/7be26a8c-bce5-45b2-86fc-be517f45fcab" />
 
+<img width="1024" src="https://github.com/user-attachments/assets/421c5e97-b9e1-442d-89b7-7170cd34070c" />
 
 # LLM Friendly context summary (PLANNED FEATURE, WIP...)
 
