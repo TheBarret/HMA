@@ -10,7 +10,7 @@ from dataclasses import field
 
 from core import (
     Heightmap, ScalarField, PipelineConfig, PipelineLayer,
-    TerrainFeature, ClassifiedFeature, CurvatureType, Traversability,
+    TerrainFeature, ClassifiedFeature, CurvatureType, FeatureType, Traversability,
     PeakFeature, RidgeFeature, ValleyFeature, SaddleFeature, FlatZoneFeature,
     PixelCoord, WorldCoord
 )
@@ -282,15 +282,18 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
 
         avg_slope = np.mean(slope[mask]) if slope is not None else 10.0
         defensive_rating = min(1.0, (prominence / 15.0) * (1 - abs(avg_slope - 15) / 30))
-
+        confidence_v = float(min(1.0, prominence / self.config.peak_confidence))
+        
         peak = PeakFeature(
             centroid=centroid_px,
             elevation_range=(float(np.min(z[mask])), elevation),
             prominence=prominence,
+            feature_type=FeatureType.PEAK,
+            confidence=confidence_v,
             metadata={
                 'size': int(np.sum(mask)),
                 'elevation': elevation,
-                'confidence': float(min(1.0, prominence / self.config.peak_confidence)),
+                'confidence': confidence_v,
                 'defensive_rating': defensive_rating,
                 'detection_method': method,
                 'mean_curvature': float(mean_curvature[y, x]) if mean_curvature is not None else 0,
@@ -342,7 +345,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             centroid_px = (int(np.mean(xs)), int(np.mean(ys)))
             elevations = z[ys, xs]
             elevation_range = (np.min(elevations), np.max(elevations))
-            connected_peaks = set()
             avg_slope = np.mean(slope[ys, xs]) if slope is not None else 10.0
             avg_confidence = np.mean(k_confidence[ys, xs])
             
@@ -360,7 +362,8 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 centroid=centroid_px,
                 elevation_range=elevation_range,
                 spine_points=spine_points,
-                connected_peaks=connected_peaks,
+                feature_type=FeatureType.RIDGE,
+                confidence=float(avg_confidence),
                 metadata={
                     'length': len(spine_points),
                     'width_meters': float(width_meters),
@@ -433,6 +436,8 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 elevation_range=elevation_range,
                 spine_points=spine_points,
                 drainage_area=drainage_area,
+                feature_type=FeatureType.VALLEY,
+                confidence=float(avg_confidence),
                 metadata={
                     'length': len(spine_points),
                     'confidence': float(avg_confidence),
@@ -532,10 +537,12 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             saddle = SaddleFeature(
                 centroid=(int(cx), int(cy)),
                 elevation_range=(elevation, elevation),
-                elevation=elevation,
-                connecting_ridges=set(),
-                connecting_valleys=set(),
+                saddle_elevation_m=elevation,
+                #REMOVED: connecting_ridges=set(),
+                #REMOVED: connecting_valleys=set(),
                 k_curvature=float(gaussian_curvature[cy, cx]),
+                feature_type=FeatureType.SADDLE,
+                confidence=float(conf),
                 metadata={
                     'mean_curvature': float(mean_curvature[cy, cx]),
                     'k_magnitude': float(k_mag),
@@ -600,6 +607,8 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 area_pixels=size,
                 max_slope=max_slope,
                 min_slope=min_slope,
+                feature_type=FeatureType.FLAT,
+                confidence=1.0,  # TODO: GAUGE CONFIDENCE
                 metadata={
                     'size': size,
                     'area_m2': size * (cell_size ** 2),
@@ -746,9 +755,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         # Connect ridges to peaks
         tolerance = self.config.feature_connection_tolerance_px
         for ridge in ridges:
-            ridge.connected_peaks = self._find_connected_peaks(
-                ridge.spine_points, peak_tree, peaks, tolerance
-            )
+            ridge.connected_peaks = self._find_connected_peaks(ridge.spine_points, peak_tree, peaks, tolerance)
 
         # Connect saddles to ridges and valleys
         for saddle in saddles:
