@@ -11,7 +11,7 @@ using `synthetic terrain`  to generate heightmaps with known features.
 
 Compare detected output features against ground truth will calibrate our model, using predefined config parameters located `core.py`.  
 
-<img width="400" src="https://github.com/user-attachments/assets/133cddbf-0c8c-488f-9b9d-3eeb8feea246" /><img width="380" src="https://github.com/user-attachments/assets/6a75743e-2ca6-422e-9423-c49e607d0f88" />
+<img width="400" src="https://github.com/user-attachments/assets/133cddbf-0c8c-488f-9b9d-3eeb8feea246" /> <img width="380" src="https://github.com/user-attachments/assets/6a75743e-2ca6-422e-9423-c49e607d0f88" />
 
 # Early Testing: Relational Analysis
 
@@ -25,7 +25,7 @@ Relations are derived from continuous mathematical fields, onto which features a
 3. Map Discrete Features (Semantics)  
    - Assign Features to Basins, Build Feature Graphs  
 
-<img width="380" src="https://github.com/user-attachments/assets/4ba4be03-a5b1-4ab7-9219-6e6bb7b93947" /><img width="360" src="https://github.com/user-attachments/assets/c2fac563-4ef0-43c4-964d-0478d6036595" />
+<img width="380" src="https://github.com/user-attachments/assets/4ba4be03-a5b1-4ab7-9219-6e6bb7b93947" /> <img width="380" src="https://github.com/user-attachments/assets/7be26a8c-bce5-45b2-86fc-be517f45fcab" />
 
 
 # LLM Friendly context summary (PLANNED FEATURE, WIP...)
