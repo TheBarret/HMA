@@ -104,7 +104,7 @@ class PipelineConfig:
     # =========================================================================
     
     horizontal_scale: float = 2.0           # [0.5-10.0] meters per pixel
-    vertical_scale: float = 0.392             # [0.05-1.0] meters per grayscale unit
+    vertical_scale: float = 0.492             # [0.05-1.0] meters per grayscale unit [0.392]
     sea_level_offset: float = 0.1          # [0-100] meters, base elevation
     noise_reduction_sigma: float = 1.0      # [0.5-5.0] Gaussian blur strength
     max_elevation_range: int = 10000        # max elevation bounds [10km range]
@@ -168,7 +168,7 @@ class PipelineConfig:
     
     # --- Saddles (passes between peaks) ---
     saddle_k_min_threshold: float = 0.00020     # [2.00e-4/m²] minimum |K| for saddle (1/m²)
-    saddle_confidence_threshold: float = 0.90    # [0.0-1.0] normalized confidence (1.0 = all)
+    saddle_confidence_threshold: float = 0.95    # [0.0-1.0] normalized confidence (1.0 = all)
 
     # --- Sea Level ---
     exclude_below_reference: bool = True         # [True/False] exclude sea domain features
@@ -194,11 +194,10 @@ class PipelineConfig:
     stream_accumulation_threshold_px: int = 65     # [10-500] pixels
     feature_snap_distance_px: int = 10             # [5-20] pixels
     snap_method: str = "nearest"                   # ["nearest", "flow_directed", "none"]
-    flat_resolution_method: str = "priority_flood" # ["priority_flood", "depression_fill"]
     include_edge_basins: bool = True               # include basins draining off-map
 
     # --- Connectivity ---
-    connection_radius_m: float = 128.0              # [50-500] meters
+    connection_radius_m: float = 50.0              # [50-500] meters                        [performance tweaker]
     connectivity_max_neighbors: int = 16           # [4-50] max graph degree
     vehicle_climb_angle: float = 25.0              # [20-45] degrees
     cliff_threshold_degrees: float = 45.0          # [30-60] degrees
@@ -214,18 +213,12 @@ class PipelineConfig:
     ridge_visibility_scale: float = 0.8            # Scale factor for ridge observer height
 
     # --- Pathfinding ---
-    connectivity_max_cost: float = 1500.0        # float('inf') or maximum allowed path cost
-    connectivity_use_astar: bool = True          # [bool]
-    connectivity_search_buffer: float = 1.5      # Heuristic buffer for candidate filtering
-    connectivity_max_visited_ratio: float = 0.3  # Max % of search space to explore
-    connectivity_parallel: bool = False          # Enable multiprocessing (future)
+    connectivity_max_cost: float = 1000.0          # float('inf') or maximum allowed path cost [performance tweaker]
+    connectivity_max_visited_ratio: float = 0.45  # Max % of search space to explore          [performance tweaker]
+    connectivity_heuristic_buffer: float = 1.5   # heuristic_buffer                          [performance tweaker]
     
     # --- Watersheds ---
     watershed_min_area_m2: float = 250.0           # [500-10000] m²
-    min_basin_outlet_prominence_m: float = 5.0     # [2-20] meters
-
-    # --- Temporal Dynamics ---
-    accumulation_thresholds_px: List[int] = field(default_factory=lambda: [100, 500, 1000])
     
     # --- Fallbacks ---
     skimage_stream_min_size_px: int = 10           # extract_stream_network() -> skimage.morphology.remove_small_objects(<object>, <size>)

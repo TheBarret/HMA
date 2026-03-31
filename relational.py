@@ -295,7 +295,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         for y in range(h):
             _acc += 1
             if _acc % 16 == 0:
-                    self._log(f"       - {_acc}...")
+                    self._log(f"       scanning: y = {y} of {h}...")
             
                     
             for x in range(w):
@@ -521,7 +521,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         self._log(f"Stream network: {np.sum(stream_mask)} pixels ({100*np.sum(stream_mask)/stream_mask.size:.2f}%) above threshold={threshold}px")
         
         if np.sum(stream_mask) == 0:
-            self._log("Warning: No streams detected. Consider lowering stream_accumulation_threshold_px")
+            self._log("Warning: No streams detected!")
             return stream_mask
         
         # Only apply advanced morphology if skimage is present
@@ -786,6 +786,62 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         
         return flow_network
 
+    def _check_line_of_sight(self, x1: int, y1: int, z1: float,
+                     x2: int, y2: int, z2: float,
+                     z: np.ndarray) -> bool:
+        """
+        Bresenham line-of-sight check.
+        
+        Args:
+            x1, y1: Start pixel coordinates
+            z1: Start height (including observer offset)
+            x2, y2: End pixel coordinates
+            z2: End height (including target offset)
+            z: Heightmap data
+        
+        Returns:
+            True if line-of-sight is clear, False otherwise
+        """
+        rows, cols = z.shape
+        
+        # Boundary check
+        if not (0 <= x1 < cols and 0 <= y1 < rows and 
+                0 <= x2 < cols and 0 <= y2 < rows):
+            return False
+        
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        err = dx - dy
+        
+        # Total Euclidean distance in pixels
+        total_distance_px = np.hypot(dx, dy)
+        
+        x, y = x1, y1
+        
+        while (x, y) != (x2, y2):
+            if (x, y) != (x1, y1):
+                # Linear interpolation of line-of-sight height
+                t = np.hypot(x - x1, y - y1) / max(total_distance_px, 1.0)
+                line_z = z1 + t * (z2 - z1)
+                terrain_z = z[y, x]
+                
+                # Check if terrain blocks view
+                if terrain_z > line_z + self.config.visibility_epsilon_m:
+                    return False
+            
+            # Bresenham step
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+        
+        return True
+
     def _build_feature_visibility_graph(self, features: List[TerrainFeature], 
                                     heightmap: Heightmap) -> Dict[str, Set[str]]:
         """
@@ -884,84 +940,17 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
                     visibility[f2.feature_id].add(f1.feature_id)
                     visible_pairs += 1
                 
-                # Optional: log progress periodically
                 if self.config.verbose and checked % 1000 == 0:
-                    self._log(f"  Visibility checks: {checked}, visible: {visible_pairs}")
+                    self._log(f"Visibility checks: {checked}, visible: {visible_pairs}")
         
         self._log(f"Visibility graph complete: {checked} checks, {visible_pairs} visible pairs")
         
         return visibility
 
-    def _check_line_of_sight(self, x1: int, y1: int, z1: float,
-                         x2: int, y2: int, z2: float,
-                         z: np.ndarray) -> bool:
-        """
-        Bresenham line-of-sight check.
-        
-        Args:
-            x1, y1: Start pixel coordinates
-            z1: Start height (including observer offset)
-            x2, y2: End pixel coordinates
-            z2: End height (including target offset)
-            z: Heightmap data
-        
-        Returns:
-            True if line-of-sight is clear, False otherwise
-        """
-        rows, cols = z.shape
-        
-        # Boundary check
-        if not (0 <= x1 < cols and 0 <= y1 < rows and 
-                0 <= x2 < cols and 0 <= y2 < rows):
-            return False
-        
-        dx = abs(x2 - x1)
-        dy = abs(y2 - y1)
-        sx = 1 if x1 < x2 else -1
-        sy = 1 if y1 < y2 else -1
-        err = dx - dy
-        
-        # Total Euclidean distance in pixels
-        total_distance_px = np.hypot(dx, dy)
-        
-        x, y = x1, y1
-        
-        while (x, y) != (x2, y2):
-            if (x, y) != (x1, y1):
-                # Linear interpolation of line-of-sight height
-                t = np.hypot(x - x1, y - y1) / max(total_distance_px, 1.0)
-                line_z = z1 + t * (z2 - z1)
-                terrain_z = z[y, x]
-                
-                # Check if terrain blocks view
-                if terrain_z > line_z + self.config.visibility_epsilon_m:
-                    return False
-            
-            # Bresenham step
-            e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                x += sx
-            if e2 < dx:
-                err += dx
-                y += sy
-        
-        return True
-
     def _build_feature_connectivity_graph(self, features: List[TerrainFeature], 
-                                   cost_surface: np.ndarray) -> Dict[str, Set[str]]:
-        """
-        A* based Connectivity Graph
-        
-        OPTIMIZATIONS:
-        1. A* with Euclidean heuristic (not blind Dijkstra)
-        2. Early termination when heuristic exceeds max_cost
-        3. Only compute i→j, mirror to j→i (no duplicate work)
-        4. Pre-filter candidates by cost heuristic before pathfinding
-        5. Bounded search ellipse (don't explore entire grid)
-        """
-        from scipy.spatial import KDTree
+                                       cost_surface: np.ndarray) -> Dict[str, Set[str]]:
         import heapq
+        from scipy.spatial import KDTree
         
         h, w = cost_surface.shape
         connectivity = {f.feature_id: set() for f in features}
@@ -969,164 +958,146 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         if len(features) < 2:
             return connectivity
         
-        # Build spatial index ONCE
+        # Precompute global stats once
+        min_cost = np.min(cost_surface)
+        median_cost = np.median(cost_surface)
+        
+        # Build spatial index
         feature_coords = np.array([(f.centroid[0], f.centroid[1]) for f in features], dtype=np.int32)
         feature_ids = [f.feature_id for f in features]
         feature_tree = KDTree(feature_coords)
         
+        # Precompute ALL neighbor relationships (one query instead of N)
         radius_px = self._connection_radius_px
-        max_cost = self.config.connectivity_max_cost
+        all_neighbors = feature_tree.query_ball_point(feature_coords, r=radius_px)
         
-        # Pre-compute median cost for heuristic estimation
-        median_cost = np.median(cost_surface)
+        # Map coordinates to feature index for O(1) lookup during Dijkstra
+        coord_to_feature = {}
+        for idx, (x, y) in enumerate(feature_coords):
+            coord_to_feature[(x, y)] = idx
+        
+        max_cost = self.config.connectivity_max_cost
+        heuristic_buffer = self.config.connectivity_heuristic_buffer
+        
+        # 8-direction neighbors
+        NEIGHBORS = [
+            (0, 1, 1.0), (1, 1, 1.414), (1, 0, 1.0), (1, -1, 1.414),
+            (0, -1, 1.0), (-1, -1, 1.414), (-1, 0, 1.0), (-1, 1, 1.414),
+        ]
+        
+        # Setup version-stamped g_scores (allocated once)
+        if not hasattr(self, '_g_scores') or self._g_scores.shape != (h, w):
+            self._g_scores = np.full((h, w), np.inf, dtype=np.float32)
+            self._g_version = np.zeros((h, w), dtype=np.int32)
+            self._current_version = 0
         
         self._log(f"Building connectivity graph: {len(features)} features, "
-                  f"radius={radius_px:.1f}px, max_cost={max_cost:.1f}")
+                  f"radius={radius_px:.1f}px, max_cost={max_cost:.1f}, buffer={heuristic_buffer}")
         
-        # Track processed pairs to avoid duplicate work
-        processed_pairs = set()
-        total_paths = 0
-        connected_count = 0
+        total_connections = 0
+        total_pairs_considered = 0
         
-        for i, f1 in enumerate(features):
-            x1, y1 = f1.centroid
-            fid1 = f1.feature_id
+        for i, source_feature in enumerate(features):
+            sx, sy = source_feature.centroid
+            source_id = source_feature.feature_id
             
-            # Query nearby features within radius
-            indices = feature_tree.query_ball_point([x1, y1], r=radius_px)
+            # Use precomputed neighbors, filter to j > i
+            candidate_indices = [j for j in all_neighbors[i] if j > i]
             
-            # Filter: only j > i (avoid duplicate bidirectional work)
-            candidates = [idx for idx in indices if idx > i]
-            
-            if not candidates:
+            if not candidate_indices:
                 continue
             
-            # Pre-filter by cost heuristic (Euclidean * median_cost)
-            filtered_candidates = []
-            for j in candidates:
-                x2, y2 = feature_coords[j]
-                euclidean_dist = np.hypot(x2 - x1, y2 - y1)
-                estimated_cost = euclidean_dist * median_cost
+            # Build target info for this source
+            target_coords = set()
+            target_info = {}
+            
+            for j in candidate_indices:
+                x, y = feature_coords[j]
+                target_coords.add((x, y))
+                target_info[(x, y)] = (feature_ids[j], j)
+            
+            # Heuristic filter with configurable buffer
+            filtered_targets = set()
+            for x, y in target_coords:
+                euclidean_dist = np.hypot(x - sx, y - sy)
+                estimated_cost = euclidean_dist * median_cost * heuristic_buffer
                 
-                # Skip if even straight-line cost exceeds threshold
-                if estimated_cost <= max_cost * 1.5:  # 50% buffer for path deviation
-                    filtered_candidates.append((j, euclidean_dist))
+                if estimated_cost <= max_cost:
+                    filtered_targets.add((x, y))
             
-            # Sort by distance (process easiest paths first)
-            filtered_candidates.sort(key=lambda x: x[1])
-            filtered_candidates = filtered_candidates[:self.config.connectivity_max_neighbors]
+            if not filtered_targets:
+                continue
             
-            if self.config.verbose:
-                self._log(f"    - {fid1}: {len(candidates)}→{len(filtered_candidates)} candidates")
+            total_pairs_considered += len(filtered_targets)
             
-            # Compute paths with A*
-            for j, _ in filtered_candidates:
-                f2 = features[j]
-                fid2 = f2.feature_id
-                x2, y2 = f2.centroid
+            # Multi-target Dijkstra
+            self._current_version += 1
+            version = self._current_version
+            
+            # Initialize source
+            self._g_scores[sy, sx] = 0.0
+            self._g_version[sy, sx] = version
+            pq = [(0.0, sx, sy)]
+            
+            remaining_targets = set(filtered_targets)
+            settled_costs = {}
+            
+            self._log(f"    #{i} [{source_id}] pairs={total_pairs_considered}")
+            
+            while pq and remaining_targets:
+                cost, x, y = heapq.heappop(pq)
                 
-                # Skip if already processed (shouldn't happen with idx > i, but safety check)
-                pair_key = tuple(sorted([fid1, fid2]))
-                if pair_key in processed_pairs:
+                # Version check - skip if stale
+                if self._g_version[y, x] != version:
+                    continue
+                if cost > self._g_scores[y, x]:
+                    continue
+                if cost > max_cost:
                     continue
                 
-                path_cost = self._astar_path_cost(
-                    cost_surface, (x1, y1), (x2, y2), max_cost
-                )
+                # Check if this is a target (settle it, but keep expanding)
+                if (x, y) in remaining_targets:
+                    settled_costs[(x, y)] = cost
+                    remaining_targets.discard((x, y))
+                    # continue neighbor expansion
                 
-                total_paths += 1
-                
-                if path_cost is not None and path_cost <= max_cost:
-                    connectivity[fid1].add(fid2)
-                    connectivity[fid2].add(fid1)  # Mirror the connection
-                    connected_count += 1
-                    processed_pairs.add(pair_key)
+                # Explore neighbors
+                for dy, dx, move_cost in NEIGHBORS:
+                    nx, ny = x + dx, y + dy
+                    
+                    if not (0 <= nx < w and 0 <= ny < h):
+                        continue
+                    
+                    step_cost = cost_surface[ny, nx] * move_cost
+                    new_cost = cost + step_cost
+                    
+                    if new_cost > max_cost:
+                        continue
+                    
+                    # Version-aware update
+                    if (self._g_version[ny, nx] != version or 
+                        new_cost < self._g_scores[ny, nx]):
+                        self._g_scores[ny, nx] = new_cost
+                        self._g_version[ny, nx] = version
+                        heapq.heappush(pq, (new_cost, nx, ny))
+            
+            # Record connections
+            for (tx, ty), path_cost in settled_costs.items():
+                if path_cost <= max_cost:
+                    target_id, _ = target_info[(tx, ty)]
+                    connectivity[source_id].add(target_id)
+                    connectivity[target_id].add(source_id)
+                    total_connections += 1
             
             if self.config.verbose and (i + 1) % 50 == 0:
-                self._log(f"  Connectivity: processed {i+1}/{len(features)} features, "
-                         f"{connected_count} connections so far")
+                self._log(f"* Processed {i+1}/{len(features)} features, "
+                         f"{total_connections} connections")
         
-        edges = sum(len(v) for v in connectivity.values()) // 2
-        self._log(f"Connectivity graph: {connected_count}/{len(features)} features connected, "
-                  f"{edges} edges, {total_paths} paths computed")
-        
-        return connectivity
-    
-    # Obsolete (too cpu expensive)
-    def _build_feature_connectivity_graph_dijkstra(self, features: List[TerrainFeature], 
-                                      cost_surface: np.ndarray) -> Dict[str, Set[str]]:
-        """
-        MAP: Features → Connectivity Graph
-        
-        Uses Dijkstra's algorithm on cost_surface to find least-cost paths.
-        Connection exists if path_cost <= connectivity_max_cost.
-        """
-        from scipy.spatial import KDTree
-        import heapq
-        
-        h, w = cost_surface.shape
-        connectivity = {f.feature_id: set() for f in features}
-        
-        if len(features) < 2:
-            return connectivity
-        
-        # Build spatial index
-        feature_coords = [(f.centroid[0], f.centroid[1]) for f in features]
-        feature_ids = [f.feature_id for f in features]
-        feature_tree = KDTree(feature_coords)
-        
-        radius_px = self._connection_radius_px
-        max_cost = self.config.connectivity_max_cost
-        
-        self._log(f"Building connectivity graph: {len(features)} features, "
-                  f"radius={radius_px:.1f}px ({self.config.connection_radius_m:.0f}m), "
-                  f"max_cost={max_cost:.1f}")
-        
-        # For each feature, find nearby features within radius
-        for i, f1 in enumerate(features):
-            x1, y1 = f1.centroid
-            # Query nearby features
-            distances, indices = feature_tree.query([(x1, y1)], k=len(features))
-            
-            candidates = []
-            for dist, idx in zip(distances[0], indices[0]):
-                if idx <= i or dist == 0:
-                    continue
-                if dist > radius_px:
-                    continue
-                
-                f2 = features[idx]
-                candidates.append((f2, dist))
-            
-            # Sort by distance and limit
-            candidates.sort(key=lambda x: x[1])
-            candidates = candidates[:self.config.connectivity_max_neighbors]
-            
-            self._log(f"    - centroid: {x1},{y1} | candidates={len(candidates)}")
-            
-            # Compute paths
-            for f2, _ in candidates:
-                x2, y2 = f2.centroid
-                
-                # Quick Euclidean-based heuristic filter
-                euclidean_cost = np.hypot(x2 - x1, y2 - y1) * np.median(cost_surface)
-                if euclidean_cost > max_cost * 2:
-                    # Even straight line exceeds max_cost by large margin, skip
-                    continue
-                
-                path_cost = self._dijkstra_path_cost(cost_surface, (x1, y1), (x2, y2), max_cost)
-                
-                if path_cost is not None and path_cost <= max_cost:
-                    connectivity[f1.feature_id].add(f2.feature_id)
-                    connectivity[f2.feature_id].add(f1.feature_id)
-            
-            if self.config.verbose and (i + 1) % 50 == 0:
-                self._log(f"  Connectivity: processed {i+1}/{len(features)} features")
-        
-        # Log statistics
         edges = sum(len(v) for v in connectivity.values()) // 2
         connected_features = sum(1 for v in connectivity.values() if v)
-        self._log(f"Connectivity graph: {connected_features}/{len(features)} features connected, {edges} edges")
+        
+        self._log(f"Connectivity graph complete: {connected_features}/{len(features)} features connected, "
+                  f"{edges} edges, {total_pairs_considered} pairs evaluated")
         
         return connectivity
     
@@ -1190,12 +1161,17 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         g_scores[sy, sx] = 0.0
         
         # Bounding box with buffer (don't search entire grid)
+        
+        # Change:
+        # min_cost from Tobler on flat terrain is ~0.71 (from your debug log: range=[0.71, 120.35]).
+        # With max_cost=1500, that gives search_radius ≈ 2112 — larger than any reasonable map. 
+        
         search_radius = int(max_cost / min_cost) if min_cost > 0 else max(h, w)
         y_min, y_max = max(0, sy - search_radius), min(h, sy + search_radius)
         x_min, x_max = max(0, sx - search_radius), min(w, sx + search_radius)
         
         visited_count = 0
-        max_visited = (x_max - x_min) * (y_max - y_min) * 0.5  # Don't explore >50% of bounds
+        max_visited = (x_max - x_min) * (y_max - y_min) * self.config.connectivity_max_visited_ratio
         
         while pq:
             f, g, x, y = heapq.heappop(pq)

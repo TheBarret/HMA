@@ -200,6 +200,213 @@ def plot_empty_map(ax, heightmap_data: np.ndarray, features: List[TerrainFeature
     ax.tick_params(labelsize=5, colors=NATO['text_muted'])
 
 # =============================================================================
+# LAYER 3: TOPOLOGY VISUALIZATION
+# =============================================================================
+
+def _plot_topology_features(ax, features: List[TerrainFeature], 
+                            cell_size: float, heightmap_data: np.ndarray):
+    """
+    Plot terrain features (peaks, ridges, valleys, saddles, flat zones) 
+    as NATO-style overlays on the main topology map.
+    """
+    
+    # =========================================================================
+    # Peaks (triangles with prominence-based sizing)
+    # =========================================================================
+    peak_x = []
+    peak_y = []
+    peak_sizes = []
+    peak_prominence = []
+    
+    for f in features:
+        if isinstance(f, PeakFeature):
+            x, y = f.centroid
+            peak_x.append(x * cell_size)
+            peak_y.append(y * cell_size)
+            
+            # Size by prominence (bigger = more prominent)
+            prominence = getattr(f, 'prominence', 10.0)
+            peak_prominence.append(prominence)
+            
+            # Scale: 12-32 points based on prominence (clamped)
+            size = np.clip(12 + prominence / 20.0, 12, 32)
+            peak_sizes.append(size)
+    
+    if peak_x:
+        # Plot all peaks as black triangles
+        ax.scatter(peak_x, peak_y, 
+                  marker='^', 
+                  s=peak_sizes,
+                  c=NATO['peak_marker'],
+                  edgecolor=NATO['paper'],
+                  linewidth=0.8,
+                  zorder=10,
+                  alpha=0.95,
+                  label='_nolegend_')  # Handled by legend separately
+        
+        # Add prominence labels for major peaks (prominence > 30m)
+        for x, y, prom in zip(peak_x, peak_y, peak_prominence):
+            if prom > 30.0:
+                ax.annotate(f'{prom:.0f}m', 
+                          (x, y),
+                          textcoords="offset points",
+                          xytext=(8, 8),
+                          fontsize=5,
+                          fontfamily='monospace',
+                          color=NATO['text_muted'],
+                          bbox=dict(boxstyle='round,pad=0.2',
+                                  facecolor=NATO['paper'],
+                                  edgecolor=NATO['border'],
+                                  alpha=0.7,
+                                  linewidth=0.5),
+                          zorder=11)
+    
+    # =========================================================================
+    # Ridges (spine lines)
+    # =========================================================================
+    for f in features:
+        if isinstance(f, RidgeFeature) and hasattr(f, 'spine_points') and f.spine_points:
+            spine_x = [p[0] * cell_size for p in f.spine_points]
+            spine_y = [p[1] * cell_size for p in f.spine_points]
+            
+            # Vary line width by ridge length (longer = thicker)
+            line_width = np.clip(1.0 + len(f.spine_points) / 200.0, 0.8, 2.5)
+            
+            ax.plot(spine_x, spine_y,
+                   color=NATO['ridge_line'],
+                   linewidth=line_width,
+                   linestyle='-',
+                   alpha=0.85,
+                   solid_capstyle='round',
+                   zorder=8,
+                   label='_nolegend_')
+    
+    # =========================================================================
+    # Valleys (spine lines, different style)
+    # =========================================================================
+    for f in features:
+        if isinstance(f, ValleyFeature) and hasattr(f, 'spine_points') and f.spine_points:
+            spine_x = [p[0] * cell_size for p in f.spine_points]
+            spine_y = [p[1] * cell_size for p in f.spine_points]
+            
+            ax.plot(spine_x, spine_y,
+                   color=NATO['valley_line'],
+                   linewidth=1.0,
+                   linestyle='-',
+                   alpha=0.8,
+                   solid_capstyle='round',
+                   zorder=7,
+                   label='_nolegend_')
+    
+    # =========================================================================
+    # Saddles (small squares with elevation)
+    # =========================================================================
+    saddle_x = []
+    saddle_y = []
+    saddle_elev = []
+    
+    for f in features:
+        if isinstance(f, SaddleFeature):
+            x, y = f.centroid
+            saddle_x.append(x * cell_size)
+            saddle_y.append(y * cell_size)
+            saddle_elev.append(getattr(f, 'saddle_elevation_m', None))
+    
+    if saddle_x:
+        ax.scatter(saddle_x, saddle_y,
+                  marker='s',
+                  s=28,
+                  c=NATO['saddle_mark'],
+                  edgecolor=NATO['paper'],
+                  linewidth=0.8,
+                  zorder=9,
+                  alpha=0.9,
+                  label='_nolegend_')
+        
+        # Add elevation labels for saddles (if available)
+        for x, y, elev in zip(saddle_x, saddle_y, saddle_elev):
+            if elev is not None:
+                ax.annotate(f'{elev:.0f}m',
+                          (x, y),
+                          textcoords="offset points",
+                          xytext=(6, -6),
+                          fontsize=4.5,
+                          fontfamily='monospace',
+                          color=NATO['text_muted'],
+                          bbox=dict(boxstyle='round,pad=0.15',
+                                  facecolor=NATO['paper'],
+                                  alpha=0.6,
+                                  linewidth=0),
+                          zorder=11)
+    
+    # =========================================================================
+    # Flat zones (polygon outlines with hatched fill for large areas)
+    # =========================================================================
+    for f in features:
+        if isinstance(f, FlatZoneFeature):
+            # Flat zones are represented by their centroid + area indicator
+            # Use a circular marker scaled by area
+            x, y = f.centroid
+            area_px = getattr(f, 'area_pixels', 0)
+            
+            if area_px > 0:
+                # Scale marker size by sqrt(area) in world units
+                area_m2 = area_px * (cell_size ** 2)
+                radius_m = np.sqrt(area_m2 / np.pi)
+                radius_px_marker = radius_m / cell_size
+                marker_size = np.clip(radius_px_marker * 2, 15, 80)
+                
+                # Draw as translucent circle with border
+                circle = plt.Circle((x * cell_size, y * cell_size),
+                                   radius_m,
+                                   facecolor=NATO['flat_fill'],
+                                   edgecolor=NATO['flat_edge'],
+                                   alpha=0.4,
+                                   linewidth=0.8,
+                                   zorder=5)
+                ax.add_patch(circle)
+                
+                # if area_m2 > self.config.assembly_major_area_threshold_m2:
+                    # hatch_circle = plt.Circle((x * cell_size, y * cell_size),
+                                              # radius_m,
+                                              # facecolor='none',
+                                              # edgecolor=NATO['flat_edge'],
+                                              # hatch='///',
+                                              # alpha=0.3,
+                                              # linewidth=0,
+                                              # zorder=6)
+                    # ax.add_patch(hatch_circle)
+    
+    # =========================================================================
+    # Prominence/dominance annotations for major peaks
+    # =========================================================================
+    # Find top 3 peaks by prominence
+    peaks = [f for f in features if isinstance(f, PeakFeature) and hasattr(f, 'prominence')]
+    if peaks:
+        top_peaks = sorted(peaks, key=lambda p: p.prominence, reverse=True)[:3]
+        
+        for i, peak in enumerate(top_peaks):
+            x, y = peak.centroid
+            prominence = peak.prominence
+            
+            # Add small dominance marker
+            ax.annotate(f'★ {prominence:.0f}m',
+                       (x * cell_size, y * cell_size),
+                       textcoords="offset points",
+                       xytext=(0, -12),
+                       fontsize=5,
+                       fontweight='bold',
+                       fontfamily='monospace',
+                       color=NATO['highlight'],
+                       ha='center',
+                       bbox=dict(boxstyle='round,pad=0.2',
+                               facecolor=NATO['paper'],
+                               edgecolor=NATO['highlight'],
+                               alpha=0.85,
+                               linewidth=0.8),
+                       zorder=12)
+
+# =============================================================================
 # LAYER 4: RELATIONAL VISUALIZATION
 # =============================================================================
 
@@ -529,6 +736,150 @@ def _draw_stamp(fig, ax_topo, map_name: str, cell_size: float,
                   edgecolor=NATO['border'], alpha=0.88, linewidth=0.7)
     )
 
+def _draw_legend(ax, relational: dict, features: List[TerrainFeature], 
+                 heightmap_shape: tuple = None, cell_size: float = None):
+    """
+    Draw a NATO-style composite legend for the main topology map.
+    Automatically detects which relational layers are present and positions
+    legend in least-crowded corner based on feature distribution.
+    """
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+    
+    legend_elements = []
+    
+    # =========================================================================
+    # Terrain features (always present)
+    # =========================================================================
+    feature_counts = {
+        'Peaks': sum(1 for f in features if isinstance(f, PeakFeature)),
+        'Ridges': sum(1 for f in features if isinstance(f, RidgeFeature)),
+        'Valleys': sum(1 for f in features if isinstance(f, ValleyFeature)),
+        'Saddles': sum(1 for f in features if isinstance(f, SaddleFeature)),
+        'Flat zones': sum(1 for f in features if isinstance(f, FlatZoneFeature)),
+    }
+    
+    # Only show feature types that exist
+    for name, count in feature_counts.items():
+        if count > 0:
+            if name == 'Peaks':
+                legend_elements.append(Line2D([0], [0], marker='^', color='w', 
+                    markerfacecolor=NATO['peak_marker'], markersize=6, 
+                    linestyle='None', label=f'{name} ({count})'))
+            elif name == 'Ridges':
+                legend_elements.append(Line2D([0], [0], color=NATO['ridge_line'], 
+                    linewidth=1.5, linestyle='-', label=f'{name} ({count})'))
+            elif name == 'Valleys':
+                legend_elements.append(Line2D([0], [0], color=NATO['valley_line'], 
+                    linewidth=1.2, linestyle='-', label=f'{name} ({count})'))
+            elif name == 'Saddles':
+                legend_elements.append(Line2D([0], [0], marker='s', color='w', 
+                    markerfacecolor=NATO['saddle_mark'], markersize=5, 
+                    linestyle='None', label=f'{name} ({count})'))
+            elif name == 'Flat zones':
+                legend_elements.append(Patch(facecolor=NATO['flat_fill'], 
+                    edgecolor=NATO['flat_edge'], linewidth=0.8, 
+                    label=f'{name} ({count})'))
+    
+    # =========================================================================
+    # Relational layers (optional)
+    # =========================================================================
+    if relational:
+        if 'stream_network_pixels' in relational:
+            legend_elements.append(Line2D([0], [0], color=NATO['water'], 
+                linewidth=1.0, linestyle='-', alpha=0.7, label='Streams'))
+        
+        if 'outlet_pixels' in relational and relational['outlet_pixels']:
+            legend_elements.append(Line2D([0], [0], marker='v', color='w', 
+                markerfacecolor=NATO['water_deep'], markersize=6, 
+                linestyle='None', label='Basin outlets'))
+        
+        if 'flow_network' in relational and relational['flow_network']:
+            legend_elements.append(Line2D([0], [0], color=NATO['water'], 
+                linewidth=1.2, linestyle='-', alpha=0.8, label='Flow direction'))
+        
+        if 'connectivity_graph' in relational and relational['connectivity_graph']:
+            legend_elements.append(Line2D([0], [0], color=NATO['highlight'], 
+                linewidth=1.2, linestyle='-', label='Traversable routes'))
+        
+        if 'visibility_graph' in relational and relational['visibility_graph']:
+            legend_elements.append(Line2D([0], [0], color=NATO['visibility'], 
+                linewidth=0.8, linestyle='-', alpha=0.5, label='Line of sight'))
+        
+        if 'cost_surface' in relational:
+            legend_elements.append(Patch(facecolor='#ff7f0e', alpha=0.3, 
+                edgecolor='none', label='High cost areas'))
+    
+    # =========================================================================
+    # Smart positioning: find least-crowded corner
+    # =========================================================================
+    if heightmap_shape and cell_size and features:
+        H, W = heightmap_shape
+        # Count features in each quadrant
+        quadrants = {'lower_left': 0, 'lower_right': 0, 'upper_left': 0, 'upper_right': 0}
+        
+        for f in features:
+            x, y = f.centroid
+            # Convert to normalized coordinates (0-1)
+            nx = x * cell_size / (W * cell_size)
+            ny = y * cell_size / (H * cell_size)
+            
+            if nx < 0.5 and ny < 0.5:
+                quadrants['lower_left'] += 1
+            elif nx >= 0.5 and ny < 0.5:
+                quadrants['lower_right'] += 1
+            elif nx < 0.5 and ny >= 0.5:
+                quadrants['upper_left'] += 1
+            else:
+                quadrants['upper_right'] += 1
+        
+        # Find quadrant with fewest features
+        best_quadrant = min(quadrants, key=quadrants.get)
+        
+        # Map quadrant to bbox_to_anchor
+        position_map = {
+            'lower_left': ('lower left', (0.02, 0.02)),
+            'lower_right': ('lower right', (0.98, 0.02)),
+            'upper_left': ('upper left', (0.02, 0.98)),
+            'upper_right': ('upper right', (0.98, 0.98))
+        }
+        loc, anchor = position_map[best_quadrant]
+    else:
+        # Default: lower right
+        loc = 'lower right'
+        anchor = (0.98, 0.02)
+    
+    # =========================================================================
+    # Draw legend with NATO styling
+    # =========================================================================
+    if legend_elements:
+        legend = ax.legend(
+            handles=legend_elements,
+            loc=loc,
+            bbox_to_anchor=anchor,
+            fontsize=5.5,
+            frameon=True,
+            fancybox=False,
+            edgecolor=NATO['border'],
+            facecolor=NATO['paper'],
+            framealpha=0.92,
+            title='LEGEND',
+            title_fontsize=6,
+            handlelength=2.0,
+            handletextpad=0.8,
+            borderpad=0.6,
+            labelspacing=0.4
+        )
+        legend.get_title().set_color(NATO['text'])
+        legend.get_title().set_fontfamily('monospace')
+        
+        for text in legend.get_texts():
+            text.set_color(NATO['text'])
+            text.set_fontfamily('monospace')
+        
+        return legend
+    
+    return None
 
 # =============================================================================
 # Master render function
@@ -597,6 +948,8 @@ def render(bundle: dict, features: list, relational: list, map_name: str = "UNDE
         color=NATO['text'], pad=6
     )
     
+    _plot_topology_features(ax_topo, features, cell_size, elev)
+    
     if relational:
         # order matters: cost → watersheds → streams → graphs
         if 'cost_surface' in relational:
@@ -612,8 +965,21 @@ def render(bundle: dict, features: list, relational: list, map_name: str = "UNDE
         if 'visibility_graph' in relational:
             plot_layer4_visibility(ax_topo, features, relational['visibility_graph'], heightmap, cell_size)
     
+
+    # --- Legend ---
+    _draw_legend(ax_topo, relational, features, (H, W), cell_size)
+
+    legend = _draw_legend(ax_topo, relational, features, (H, W), cell_size)
+    if legend and legend._loc == 'lower right':
+        stamp_x = 0.01  # Bottom-left
+        stamp_va = 'bottom'
+    else:
+        stamp_x = 0.01
+        stamp_va = 'bottom'
+        
     # --- Stamp ---
     _draw_stamp(fig, ax_topo, map_name, cell_size, (H, W), len(features))
+    
 
     # --- Figure title ---
     fig.suptitle(

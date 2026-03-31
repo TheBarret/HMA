@@ -53,32 +53,6 @@ def run_pipeline(png_path: str, config: PipelineConfig) -> Dict:
     relational = layer4.execute(bundle)
     bundle.update(relational)
     
-    
-    # Contextualizer testing
-    #context = TerrainContext(config)
-    #context.ingest_layer0(heightmap)
-    #context.ingest_layer1(slope_aspect['slope'], slope_aspect['aspect'])
-    #context.ingest_layer2(
-    #    curvature['curvature'],
-    #    curvature['gaussian_curvature'],
-    #    curvature['curvature_type'],
-    #)
-    # sort and commit
-    #grouped = {
-    #    "peaks": [f for f in features if isinstance(f, PeakFeature)],
-    #    "ridges": [f for f in features if isinstance(f, RidgeFeature)],
-    #    "valleys": [f for f in features if isinstance(f, ValleyFeature)],
-    #    "saddles": [f for f in features if isinstance(f, SaddleFeature)],
-    #    "flat_zones": [f for f in features if isinstance(f, FlatZoneFeature)],
-    #}
-    #context.ingest_layer3(grouped)
-
-    #print(context.describe())
-    #system_prompt = context.to_llm_prompt()
-    #print(context.query("What is a good camp area?"))
-    #print(context.query("What routes avoid steep terrain?"))
-    #print(context.query("Where should I place an observation post?"))
-    
     # visualize
     map_name = Path(png_path).stem
     render(
@@ -117,7 +91,7 @@ def main():
     # Setup config
     config = PipelineConfig()
     config.verbose = True
-    run_pipeline('./assets/3point.png', config)
+    run_pipeline('./assets/heightmap_large.png', config)
 
 
 # =============================================================================
