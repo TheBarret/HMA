@@ -13,7 +13,7 @@ Compare detected output features against ground truth will calibrate our model, 
 
 <img width="400" src="https://github.com/user-attachments/assets/133cddbf-0c8c-488f-9b9d-3eeb8feea246" /><img width="380" src="https://github.com/user-attachments/assets/6a75743e-2ca6-422e-9423-c49e607d0f88" />
 
-# LLM Friendly context summary (WIP)
+# LLM Friendly context summary (PLANNED FEATURE, WIP...)
 
 The pipeline comes with a `context` module that will wrap arround the data and contextualizes it,  
 where the idea is that you can `query` the context:  
@@ -60,9 +60,13 @@ N-facing slopes dominate the aspect distribution.
 [Visualizer] Saved → t_saddle_topology.png
 ```
 
-# Early Testing
+# Early Testing: Topological Analysis
 
 <img width="1024" src="https://github.com/user-attachments/assets/4ba4be03-a5b1-4ab7-9219-6e6bb7b93947" />
+
+# Early Testing: Relational Analysis
+
+<img width="1024" src="https://github.com/user-attachments/assets/c2fac563-4ef0-43c4-964d-0478d6036595" />
 
 
 ---
