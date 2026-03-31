@@ -15,13 +15,13 @@ import matplotlib.lines as mlines
 from matplotlib.gridspec import GridSpec
 from matplotlib.colors import LightSource
 from scipy.ndimage import gaussian_filter
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 from pathlib import Path
 
 from core import (
     PipelineConfig,
     PeakFeature, RidgeFeature, ValleyFeature, SaddleFeature, FlatZoneFeature,
-    TerrainFeature
+    TerrainFeature, PixelCoord
 )
 
 # =============================================================================
@@ -32,8 +32,8 @@ NATO = {
     'paper':        '#e8dfc8',   # map paper base
     'paper_dark':   '#d4c9a8',   # slightly darker for contrast panels
     'contour':      '#8b7355',   # brown contour lines
-    'water':        '#a8c8e8',   # water bodies
-    'water_deep':   '#6ba3c8',   # deeper water
+    'water':        '#6396c9',   # water bodies
+    'water_deep':   '#3c6d9e',   # deeper water
     'lowland':      '#c8d8a8',   # low elevation fill
     'highland':     '#b8a878',   # high elevation fill
     'peak_marker':  '#1a1a1a',   # black peak triangle
@@ -41,13 +41,14 @@ NATO = {
     'valley_line':  '#4a6b8a',   # muted blue valley spine
     'saddle_mark':  '#5c3d1e',   # brown saddle marker
     'flat_fill':    '#c8d4a0',   # olive flat zone
-    'flat_edge':    '#7a8c5a',   # flat zone border
+    'flat_edge':    '#b8a878',   # flat zone border
     'grid':         '#b8a878',   # grid lines
     'text':         '#1a1a1a',   # primary text
     'text_muted':   '#5c4a2a',   # secondary text
     'border':       '#2c1810',   # frame border
-    'danger':       '#8b1a1a',   # for cliffs / impassable
+    'danger':       '#df0ceb',   # for cliffs / impassable
     'highlight':    '#c8781e',   # accent / callout
+    'visibility':   '#e03d60',   # visibility lines
 }
 
 # =============================================================================
@@ -161,18 +162,12 @@ def plot_layer3_summary(ax, features: List[TerrainFeature]):
     for spine in ['top', 'right']:
         ax.spines[spine].set_visible(False)
 
-
 # =============================================================================
-# Main topology map
+# Placeholder
 # =============================================================================
 
-def plot_topology_map(ax, heightmap_data: np.ndarray, features: List[TerrainFeature],
+def plot_empty_map(ax, heightmap_data: np.ndarray, features: List[TerrainFeature],
                       cell_size: float = 2.0):
-    """
-    Full NATO-style topology map.
-    Base: hillshaded elevation with terrain colormap.
-    Overlays: peaks, ridges, valleys, saddles, flat zones.
-    """
     H, W = heightmap_data.shape
 
     # --- Base: terrain color + hillshade blend ---
@@ -189,127 +184,7 @@ def plot_topology_map(ax, heightmap_data: np.ndarray, features: List[TerrainFeat
 
     ax.imshow(blended, interpolation='bilinear', origin='upper',
               extent=[0, W * cell_size, H * cell_size, 0])
-
-    # --- Contour lines (thin, brown, NATO style) ---
-    elev_m = heightmap_data  # already in meters from pipeline
-    levels = np.arange(
-        np.percentile(elev_m[elev_m > 0], 5) if np.any(elev_m > 0) else elev_m.min(),
-        elev_m.max(),
-        5.0   # 5m contour interval
-    )
-    if len(levels) > 1:
-        xs = np.linspace(0, W * cell_size, W)
-        ys = np.linspace(0, H * cell_size, H)
-        # Major every 25m
-        major_levels = levels[::5]
-        minor_levels = levels[~np.isin(levels, major_levels)]
-
-        ax.contour(xs, ys, elev_m, levels=minor_levels,
-                   colors=NATO['contour'], linewidths=0.2, alpha=0.45)
-        ax.contour(xs, ys, elev_m, levels=major_levels,
-                   colors=NATO['contour'], linewidths=0.55, alpha=0.65)
-
-    # --- Flat zones (filled polygons, lowest layer) ---
-    flat_zones  = [f for f in features if isinstance(f, FlatZoneFeature)]
-    for fz in flat_zones:
-        bounds = fz.metadata.get('bounds')
-        if bounds:
-            x0, x1, y0, y1 = bounds
-            rect = mpatches.Rectangle(
-                (x0 * cell_size, y0 * cell_size),
-                (x1 - x0) * cell_size,
-                (y1 - y0) * cell_size,
-                linewidth=0.8,
-                edgecolor=NATO['flat_edge'],
-                facecolor=NATO['flat_fill'],
-                alpha=0.28,
-                linestyle='--'
-            )
-            ax.add_patch(rect)
-
-    # --- Valley spines ---
-    valleys = [f for f in features if isinstance(f, ValleyFeature)]
-    for valley in valleys:
-        if valley.spine_points and len(valley.spine_points) > 1:
-            xs_v = [p[0] * cell_size for p in valley.spine_points]
-            ys_v = [p[1] * cell_size for p in valley.spine_points]
-            conf = valley.metadata.get('confidence', 0.5)
-            lw = 0.6 + conf * 0.8
-            ax.plot(xs_v, ys_v,
-                    color=NATO['valley_line'], linewidth=lw,
-                    alpha=0.75, solid_capstyle='round', solid_joinstyle='round',
-                    zorder=3)
-            # Tick marks along valley (drainage direction indicator)
-            if len(valley.spine_points) > 4:
-                step = max(1, len(valley.spine_points) // 4)
-                for k in range(0, len(valley.spine_points) - 1, step):
-                    mx = (valley.spine_points[k][0] + valley.spine_points[k+1][0]) / 2 * cell_size
-                    my = (valley.spine_points[k][1] + valley.spine_points[k+1][1]) / 2 * cell_size
-                    ax.plot(mx, my, 's', color=NATO['valley_line'],
-                            markersize=1.0, alpha=0.6, zorder=3)
-
-    # --- Ridge spines ---
-    ridges = [f for f in features if isinstance(f, RidgeFeature)]
-    for ridge in ridges:
-        if ridge.spine_points and len(ridge.spine_points) > 1:
-            xs_r = [p[0] * cell_size for p in ridge.spine_points]
-            ys_r = [p[1] * cell_size for p in ridge.spine_points]
-            conf = ridge.metadata.get('confidence', 0.5)
-            lw = 0.7 + conf * 1.0
-            ax.plot(xs_r, ys_r,
-                    color=NATO['ridge_line'], linewidth=lw,
-                    alpha=0.85, solid_capstyle='round', solid_joinstyle='round',
-                    zorder=4)
-
-    # --- Saddles (bowtie glyph) ---
-    saddles = [f for f in features if isinstance(f, SaddleFeature)]
-    for saddle in saddles:
-        cx, cy = saddle.centroid
-        conf = saddle.metadata.get('confidence', 0.3)
-        size = 2.5 + conf * 2.0
-        # Two small opposing triangles = bowtie
-        ax.plot(cx * cell_size, cy * cell_size,
-                marker=(4, 0, 45),   # rotated square = diamond
-                markersize=size,
-                color=NATO['saddle_mark'],
-                alpha=0.7,
-                zorder=5,
-                markeredgewidth=0.3,
-                markeredgecolor=NATO['border'])
-
-    # --- Peaks (NATO triangle marker + prominence label) ---
-    peaks = [f for f in features if isinstance(f, PeakFeature)]
-    # Sort by prominence so larger peaks render on top
-    peaks_sorted = sorted(peaks, key=lambda p: p.prominence)
-    for peak in peaks_sorted:
-        cx, cy = peak.centroid
-        prom = peak.prominence
-        # Size by prominence: minor=4, major=9
-        size = np.clip(4.0 + (prom / 15.0) * 5.0, 4, 10)
-        # Triangle up = peak
-        ax.plot(cx * cell_size, cy * cell_size,
-                marker='^',
-                markersize=size,
-                color=NATO['peak_marker'],
-                zorder=6,
-                markeredgewidth=0.4,
-                markeredgecolor='#ffffff',
-                alpha=0.92)
-        # Label only significant peaks
-        if prom > 20.0:
-            elev = peak.metadata.get('elevation', 0)
-            ax.annotate(
-                f"{elev:.0f}m",
-                xy=(cx * cell_size, cy * cell_size),
-                xytext=(4, -6),
-                textcoords='offset points',
-                fontsize=4.5,
-                fontfamily='monospace',
-                color=NATO['text'],
-                fontweight='bold',
-                zorder=7
-            )
-
+    
     # --- Map frame and grid ---
     ax.set_facecolor(NATO['water'])
     ax.set_xlim(0, W * cell_size)
@@ -324,39 +199,311 @@ def plot_topology_map(ax, heightmap_data: np.ndarray, features: List[TerrainFeat
     ax.grid(True, color=NATO['grid'], linewidth=0.25, alpha=0.5, linestyle=':')
     ax.tick_params(labelsize=5, colors=NATO['text_muted'])
 
-    for spine in ax.spines.values():
-        spine.set_edgecolor(NATO['border'])
-        spine.set_linewidth(1.2)
+# =============================================================================
+# LAYER 4: RELATIONAL VISUALIZATION
+# =============================================================================
 
-    # --- Legend ---
-    legend_elements = [
-        mlines.Line2D([0], [0], marker='^', color='w',
-                      markerfacecolor=NATO['peak_marker'], markersize=6,
-                      label='Peak', markeredgecolor='white', markeredgewidth=0.3),
-        mlines.Line2D([0], [0], color=NATO['ridge_line'], linewidth=1.2,
-                      label='Ridge'),
-        mlines.Line2D([0], [0], color=NATO['valley_line'], linewidth=1.2,
-                      label='Valley'),
-        mlines.Line2D([0], [0], marker=(4, 0, 45), color='w',
-                      markerfacecolor=NATO['saddle_mark'], markersize=5,
-                      label='Saddle'),
-        mpatches.Patch(facecolor=NATO['flat_fill'], edgecolor=NATO['flat_edge'],
-                       linestyle='--', linewidth=0.8, alpha=0.6, label='Flat Zone'),
-    ]
-    leg = ax.legend(
-        handles=legend_elements,
-        loc='lower right',
-        fontsize=5,
-        framealpha=0.88,
-        facecolor=NATO['paper'],
-        edgecolor=NATO['border'],
-        title='FEATURES',
-        title_fontsize=5,
-        handlelength=1.5,
-    )
-    leg.get_title().set_fontfamily('monospace')
-    leg.get_title().set_color(NATO['text'])
+def plot_layer4_watersheds(ax, watershed_labels: np.ndarray, 
+                           outlets: List[PixelCoord],
+                           cell_size: float,
+                           alpha: float = 0.05):
+    """
+    Render watershed basins as colored regions.
+    
+    OPTIMIZATION: Use unique labels + single polygon per basin
+    instead of per-pixel rendering.
+    """
+    from scipy.ndimage import find_objects
+    
+    unique_labels = np.unique(watershed_labels[watershed_labels >= 0])
+    
+    # Limit to top-N largest basins (avoid clutter)
+    if len(unique_labels) > 12:
+        basin_sizes = [(lbl, np.sum(watershed_labels == lbl)) 
+                       for lbl in unique_labels]
+        basin_sizes.sort(key=lambda x: x[1], reverse=True)
+        unique_labels = [lbl for lbl, _ in basin_sizes[:12]]
+    
+    # Generate distinct colors for basins
+    colors = plt.cm.tab10(np.linspace(0, 1, len(unique_labels)))
+    
+    for i, lbl in enumerate(unique_labels):
+        mask = (watershed_labels == lbl)
+        
+        # Skip tiny basins
+        if np.sum(mask) < 100:
+            continue
+        
+        # Find bounding box for efficiency
+        slices = find_objects(mask.astype(int))
+        if slices:
+            y_slice, x_slice = slices[0]
+            y_min, y_max = y_slice.start, y_slice.stop
+            x_min, x_max = x_slice.start, x_slice.stop
+            
+            # Render as image patch (faster than contour)
+            patch = np.zeros_like(mask, dtype=float)
+            patch[y_min:y_max, x_min:x_max] = mask[y_min:y_max, x_min:x_max]
+            
+            ax.imshow(patch, cmap=mcolors.ListedColormap([colors[i]]),
+                     alpha=alpha, origin='upper',
+                     extent=[0, watershed_labels.shape[1] * cell_size,
+                            watershed_labels.shape[0] * cell_size, 0],
+                     vmin=0, vmax=1)
+    
+    # Draw outlet markers
+    outlet_x = [o[0] * cell_size for o in outlets[:20]]  # Limit to 20
+    outlet_y = [o[1] * cell_size for o in outlets[:20]]
+    if outlet_x:
+        ax.scatter(outlet_x, outlet_y, c=NATO['water_deep'], s=8, 
+                  marker='v', edgecolor=NATO['border'], linewidth=0.5,
+                  label='Outlets', zorder=5)
 
+
+def plot_layer4_streams(ax, stream_mask: np.ndarray, 
+                        cell_size: float,
+                        color: str = None,
+                        linewidth: float = 0.8):
+    """
+    Render stream network as vector lines.
+    
+    OPTIMIZATION: Convert pixel mask to line segments
+    instead of drawing individual pixels.
+    """
+    from skimage.morphology import skeletonize
+    
+    # Ensure 1-pixel wide
+    if stream_mask.dtype == bool:
+        stream_mask = skeletonize(stream_mask)
+    
+    # Find stream pixels
+    ys, xs = np.where(stream_mask > 0)
+    
+    if len(xs) == 0:
+        return
+    
+    # Convert to world coordinates
+    stream_x = xs * cell_size
+    stream_y = ys * cell_size
+    
+    # Draw as scatter (faster than line collection for dense networks)
+    ax.scatter(stream_x, stream_y, c=color or NATO['water'],
+              s=0.5, alpha=0.7, marker='.', linewidths=0,
+              label='Streams', zorder=4)
+
+
+def plot_layer4_flow_network(ax, features: List[TerrainFeature],
+                             flow_graph: Dict[str, List[str]],
+                             heightmap, cell_size: float,
+                             max_edges: int = 50):
+    """
+    Render hydrological flow connections between features.
+    
+    OPTIMIZATION: Limit edges, use curved arrows for clarity.
+    """
+    from matplotlib.patches import FancyArrowPatch
+    
+    # Build feature lookup
+    feat_lookup = {f.feature_id: f for f in features}
+    
+    edges_drawn = 0
+    for src_id, dst_ids in flow_graph.items():
+        if src_id not in feat_lookup:
+            continue
+        src = feat_lookup[src_id]
+        
+        for dst_id in dst_ids:
+            if dst_id not in feat_lookup:
+                continue
+            if edges_drawn >= max_edges:
+                break
+            
+            dst = feat_lookup[dst_id]
+            
+            # World coordinates
+            x1, y1 = src.centroid[0] * cell_size, src.centroid[1] * cell_size
+            x2, y2 = dst.centroid[0] * cell_size, dst.centroid[1] * cell_size
+            
+            # Elevation difference for arrow styling
+            z1 = heightmap.data[src.centroid[1], src.centroid[0]]
+            z2 = heightmap.data[dst.centroid[1], dst.centroid[0]]
+            elevation_drop = z1 - z2
+            
+            # Color by elevation drop (blue = more drop)
+            color_intensity = min(1.0, elevation_drop / 50.0)
+            edge_color = plt.cm.Blues(0.3 + 0.7 * color_intensity)
+            
+            # Curved arrow (avoids overlapping with straight lines)
+            arrow = FancyArrowPatch(
+                (x1, y1), (x2, y2),
+                arrowstyle='->,head_width=8,head_length=10',
+                mutation_scale=1.5,
+                linewidth=1.2,
+                color=edge_color,
+                alpha=0.8,
+                connectionstyle='arc3,rad=0.15',
+                zorder=6
+            )
+            ax.add_patch(arrow)
+            edges_drawn += 1
+        
+        if edges_drawn >= max_edges:
+            break
+    
+    if edges_drawn > 0:
+        ax.plot([], [], color=NATO['water'], linewidth=1.5, 
+               label=f'Flow ({edges_drawn} edges)')
+
+
+def plot_layer4_connectivity(ax, features: List[TerrainFeature],
+                             connectivity_graph: Dict[str, Set[str]],
+                             cell_size: float,
+                             max_edges: int = 100,
+                             show_labels: bool = False):
+    """
+    Render traversability connectivity graph.
+    
+    OPTIMIZATION: Density-based rendering for large graphs.
+    """
+    from matplotlib.patches import FancyArrowPatch
+    
+    feat_lookup = {f.feature_id: f for f in features}
+    edges_drawn = 0
+    processed_pairs = set()
+    
+    # Sort features by importance (peaks first, then by prominence)
+    def feature_priority(f):
+        if isinstance(f, PeakFeature):
+            return (0, -getattr(f, 'prominence', 0))
+        return (1, 0)
+    
+    sorted_features = sorted(features, key=feature_priority)
+    
+    for src in sorted_features:
+        if src.feature_id not in connectivity_graph:
+            continue
+        
+        for dst_id in connectivity_graph[src.feature_id]:
+            if dst_id not in feat_lookup:
+                continue
+            
+            # Avoid duplicate edges (undirected graph)
+            pair_key = tuple(sorted([src.feature_id, dst_id]))
+            if pair_key in processed_pairs:
+                continue
+            processed_pairs.add(pair_key)
+            
+            if edges_drawn >= max_edges:
+                break
+            
+            dst = feat_lookup[dst_id]
+            
+            x1, y1 = src.centroid[0] * cell_size, src.centroid[1] * cell_size
+            x2, y2 = dst.centroid[0] * cell_size, dst.centroid[1] * cell_size
+            
+            # Line style by feature type
+            if isinstance(src, PeakFeature) and isinstance(dst, PeakFeature):
+                line_style = '-'
+                line_width = 1.5
+                line_color = NATO['highlight']
+            elif isinstance(src, (RidgeFeature, ValleyFeature)):
+                line_style = '--'
+                line_width = 1.0
+                line_color = NATO['ridge_line']
+            else:
+                line_style = ':'
+                line_width = 0.8
+                line_color = NATO['text_muted']
+            
+            ax.plot([x1, x2], [y1, y2], 
+                   linestyle=line_style, linewidth=line_width,
+                   color=line_color, alpha=0.5, zorder=3)
+            edges_drawn += 1
+        
+        if edges_drawn >= max_edges:
+            break
+    
+    if edges_drawn > 0:
+        ax.plot([], [], color=NATO['highlight'], linewidth=1.5,
+               label=f'Connectivity ({edges_drawn} edges)')
+
+
+def plot_layer4_visibility(ax, features: List[TerrainFeature],
+                           visibility_graph: Dict[str, Set[str]],
+                           heightmap, cell_size: float,
+                           max_edges: int = 30):
+    """
+    Render line-of-sight visibility connections.
+    
+    OPTIMIZATION: Only show high-value visibility (peaks to peaks).
+    """
+    feat_lookup = {f.feature_id: f for f in features}
+    edges_drawn = 0
+    
+    # Filter to peak-to-peak visibility only (most tactically relevant)
+    peaks = [f for f in features if isinstance(f, PeakFeature)]
+    peak_ids = {p.feature_id for p in peaks}
+    
+    for src in peaks:
+        if src.feature_id not in visibility_graph:
+            continue
+        
+        visible_ids = visibility_graph[src.feature_id]
+        
+        for dst_id in visible_ids:
+            if dst_id not in peak_ids:
+                continue
+            if dst_id not in feat_lookup:
+                continue
+            
+            dst = feat_lookup[dst_id]
+            
+            x1, y1 = src.centroid[0] * cell_size, src.centroid[1] * cell_size
+            x2, y2 = dst.centroid[0] * cell_size, dst.centroid[1] * cell_size
+            
+            # Check if line crosses high terrain (optional LOS validation)
+            ax.plot([x1, x2], [y1, y2],
+                   linestyle='-', linewidth=0.8,
+                   color=NATO['visibility'], alpha=0.4,
+                   zorder=2)
+            edges_drawn += 1
+        
+        if edges_drawn >= max_edges:
+            break
+    
+    if edges_drawn > 0:
+        ax.plot([], [], color=NATO['visibility'], linewidth=1.0,
+               label=f'Visibility ({edges_drawn} pairs)')
+
+
+def plot_layer4_cost_surface(ax, cost_surface: np.ndarray,
+                             cell_size: float,
+                             alpha: float = 0.05):
+    """
+    Render traversability cost as heatmap overlay.
+    
+    OPTIMIZATION: Downsample for rendering, use perceptual colormap.
+    """
+    # Downsample if too large
+    if cost_surface.shape[0] > 512:
+        from scipy.ndimage import zoom
+        scale = 512 / cost_surface.shape[0]
+        cost_surface = zoom(cost_surface, scale, order=1)
+        cell_size = cell_size / scale
+    
+    # Normalize to 0-1 (clip extremes)
+    cost_clipped = np.clip(cost_surface, 
+                          np.percentile(cost_surface, 5),
+                          np.percentile(cost_surface, 95))
+    cost_norm = (cost_clipped - cost_clipped.min()) / (np.ptp(cost_clipped) + 1e-8)
+    
+    # Use yellow-red for cost (intuitive: yellow=easy, red=hard)
+    cmap = plt.cm.YlOrRd
+    
+    ax.imshow(cost_norm, cmap=cmap, alpha=alpha, origin='upper',
+             extent=[0, cost_surface.shape[1] * cell_size,
+                    cost_surface.shape[0] * cell_size, 0],
+             vmin=0, vmax=1, zorder=1)
 
 # =============================================================================
 # Stamp block (bottom-right corner of topology map)
@@ -367,10 +514,10 @@ def _draw_stamp(fig, ax_topo, map_name: str, cell_size: float,
     """Draw a NATO-style map stamp in the corner of the topology axes."""
     H, W = shape
     stamp_text = (
-        f"HMA · TOPOLOGICAL SURVEY\n"
+        f"GENERAL INFORMATION\n"
         f"SCALE 1:{int(cell_size * 1000)}  CELL {cell_size}m/px\n"
         f"GRID {W*cell_size:.0f}m × {H*cell_size:.0f}m\n"
-        f"FEATURES · {feature_count}  |  LAYER 3"
+        f"FEATURES · {feature_count}"
     )
     ax_topo.text(
         0.01, 0.01, stamp_text,
@@ -387,7 +534,7 @@ def _draw_stamp(fig, ax_topo, map_name: str, cell_size: float,
 # Master render function
 # =============================================================================
 
-def render(bundle: dict, features: list, map_name: str = "UNKNOWN",
+def render(bundle: dict, features: list, relational: list, map_name: str = "UNDEFINED",
            save_path: Optional[str] = None, dpi: int = 180):
     """
     Render the full HMA visualization.
@@ -441,20 +588,36 @@ def render(bundle: dict, features: list, map_name: str = "UNKNOWN",
     plot_layer2_curvature(ax_l2, curvature)
     plot_layer3_summary(ax_l3, features)
 
-    # --- Main topology map ---
-    plot_topology_map(ax_topo, elev, features, cell_size=cell_size)
+    # --- main portrait plot ---
+    plot_empty_map(ax_topo, elev, features, cell_size=cell_size)
+    
     ax_topo.set_title(
-        f'TOPOLOGICAL SURVEY  ·  {map_name.upper()}',
+        f'HMA ANALYSIS · {map_name.upper()}',
         fontsize=9, fontweight='bold', fontfamily='monospace',
         color=NATO['text'], pad=6
     )
-
+    
+    if relational:
+        # order matters: cost → watersheds → streams → graphs
+        if 'cost_surface' in relational:
+            plot_layer4_cost_surface(ax_topo, relational['cost_surface'], cell_size, alpha=0.2)
+        if 'watershed_labels' in relational and 'outlet_pixels' in relational:
+            plot_layer4_watersheds(ax_topo, relational['watershed_labels'], relational['outlet_pixels'], cell_size)
+        if 'stream_network_pixels' in relational:
+            plot_layer4_streams(ax_topo, relational['stream_network_pixels'], cell_size)
+        if 'flow_network' in relational:
+            plot_layer4_flow_network(ax_topo, features, relational['flow_network'], heightmap, cell_size)
+        if 'connectivity_graph' in relational:
+            plot_layer4_connectivity(ax_topo, features, relational['connectivity_graph'], cell_size)
+        if 'visibility_graph' in relational:
+            plot_layer4_visibility(ax_topo, features, relational['visibility_graph'], heightmap, cell_size)
+    
     # --- Stamp ---
     _draw_stamp(fig, ax_topo, map_name, cell_size, (H, W), len(features))
 
     # --- Figure title ---
     fig.suptitle(
-        'HEIGHTMAP ANALYSIS  ·  LAYER 0–3  ·  STRUCTURAL DECOMPOSITION',
+        'HEIGHTMAP ANALYSIS  ·  STRUCTURAL DECOMPOSITION',
         fontsize=8, fontfamily='monospace', color=NATO['text_muted'],
         y=0.975
     )

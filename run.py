@@ -2,7 +2,7 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from core import PipelineConfig
+from core import PipelineConfig, PeakFeature, RidgeFeature, ValleyFeature, SaddleFeature, FlatZoneFeature
 from calibration import Layer0_Calibration
 from lgeometry import Layer1_LocalGeometry
 from rgeometry import Layer2_RegionalGeometry
@@ -10,7 +10,7 @@ from topological import Layer3_TopologicalFeatures
 from relational import Layer4_Relational
 from semantics import Layer5_Semantics
 from visualizer import render
-from context import TerrainContext
+#from context import TerrainContext
 
 """
     HMA Staging script (testrig)
@@ -48,27 +48,50 @@ def run_pipeline(png_path: str, config: PipelineConfig) -> Dict:
     features = layer3.execute(bundle)
     bundle['features'] = features
     
-    context = TerrainContext(config)
-    context.ingest_layer0(heightmap)
-    context.ingest_layer1(slope_aspect['slope'], slope_aspect['aspect'])
-    print(context.describe())
+    # Layer 4
+    layer4 = Layer4_Relational(config)
+    relational = layer4.execute(bundle)
+    bundle.update(relational)
     
     
-    # Visualize
+    # Contextualizer testing
+    #context = TerrainContext(config)
+    #context.ingest_layer0(heightmap)
+    #context.ingest_layer1(slope_aspect['slope'], slope_aspect['aspect'])
+    #context.ingest_layer2(
+    #    curvature['curvature'],
+    #    curvature['gaussian_curvature'],
+    #    curvature['curvature_type'],
+    #)
+    # sort and commit
+    #grouped = {
+    #    "peaks": [f for f in features if isinstance(f, PeakFeature)],
+    #    "ridges": [f for f in features if isinstance(f, RidgeFeature)],
+    #    "valleys": [f for f in features if isinstance(f, ValleyFeature)],
+    #    "saddles": [f for f in features if isinstance(f, SaddleFeature)],
+    #    "flat_zones": [f for f in features if isinstance(f, FlatZoneFeature)],
+    #}
+    #context.ingest_layer3(grouped)
+
+    #print(context.describe())
+    #system_prompt = context.to_llm_prompt()
+    #print(context.query("What is a good camp area?"))
+    #print(context.query("What routes avoid steep terrain?"))
+    #print(context.query("Where should I place an observation post?"))
+    
+    # visualize
     map_name = Path(png_path).stem
     render(
         bundle=bundle,
         features=features,
+        relational=relational,
         map_name=map_name,
         save_path=f"{map_name}_topology.png",
         dpi=180
     )
     #return {'heightmap': heightmap, 'features': features}
     
-    # Layer 4
-    #layer4 = Layer4_Relational(config)
-    #relational = layer4.execute(bundle)
-    #bundle.update(relational)
+   
     
     # Layer 5
     #layer5 = Layer5_Semantics(config)
@@ -94,7 +117,7 @@ def main():
     # Setup config
     config = PipelineConfig()
     config.verbose = True
-    run_pipeline('./assets/t_saddle.png', config)
+    run_pipeline('./assets/3point.png', config)
 
 
 # =============================================================================

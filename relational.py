@@ -1,5 +1,5 @@
 """
-Layer 4: Relational Analysis (Redesigned Prototype)
+Layer 4: Relational Analysis
 ==================================================
 ARCHITECTURAL PHILOSOPHY:
 This module adheres to Foundation.txt Section: "The Analysis Pipeline".
@@ -46,7 +46,12 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         self._vehicle_climb_angle = config.vehicle_climb_angle
         self._cliff_threshold = config.cliff_threshold_degrees
         self._watershed_min_area_px = config.watershed_min_area_m2 / (config.horizontal_scale ** 2)
+        # Recommended production values:
+        # - 128x128 test maps: 50-100px
+        # - 512x512 production: 200-500px
+        # - 1024x1024+ large maps: 500-1000px
         self._stream_accumulation_threshold = config.stream_accumulation_threshold_px
+        self._log(f"Config stream threshold: {config.stream_accumulation_threshold_px}px")
 
     def _log(self, msg: str) -> None:
         if self.config.verbose:
@@ -330,61 +335,60 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
     def _compute_flow_accumulation_field(self, flow_direction: np.ndarray) -> np.ndarray:
         """
         COMPUTE: Flow Accumulation via topological sort.
+        FIX: Use indegree (upstream count), not outdegree (downstream flag).
         """
         from collections import deque
         
         h, w = flow_direction.shape
-        accumulation = np.ones(flow_direction.shape, dtype=np.float32)
+        accumulation = np.ones(flow_direction.shape, dtype=np.float32)  # Each cell counts itself
         
-        # D8 decode: code → (dy, dx) of DOWNSTREAM neighbor
         D8_DECODE = {
-            1: (0, 1),    # East
-            2: (1, 1),    # Southeast
-            3: (1, 0),    # South
-            4: (1, -1),   # Southwest
-            5: (0, -1),   # West
-            6: (-1, -1),  # Northwest
-            7: (-1, 0),   # North
-            8: (-1, 1),   # Northeast
-            0: (0, 0),    # Sink
+            1: (0, 1), 2: (1, 1), 3: (1, 0), 4: (1, -1),
+            5: (0, -1), 6: (-1, -1), 7: (-1, 0), 8: (-1, 1),
+            0: (0, 0),
         }
         
         # Build reverse graph: which cells flow INTO each cell
         receivers = [[] for _ in range(h * w)]
-        outdegree = np.zeros(flow_direction.shape, dtype=np.int32)
+        
+        # Track indegree (count of upstream contributors), not outdegree
+        indegree = np.zeros(flow_direction.shape, dtype=np.int32)
         
         for y in range(h):
             for x in range(w):
                 code = flow_direction[y, x]
                 if code == 0:
-                    continue
+                    continue  # Outlet, no downstream
                 
                 dy, dx = D8_DECODE.get(code, (0, 0))
                 ny, nx = y + dy, x + dx
                 
                 if 0 <= ny < h and 0 <= nx < w:
-                    outdegree[y, x] = 1
+                    # Cell (y,x) flows INTO (ny,nx)
                     receivers[ny * w + nx].append((y, x))
+                    indegree[ny, nx] += 1  # Count upstream contributors
         
-        # Topological sort: start with cells that have no upstream contributors
+        # Start with cells that have NO upstream contributors (sources)
         queue = deque()
         for y in range(h):
             for x in range(w):
-                if outdegree[y, x] == 0:
+                if indegree[y, x] == 0:  # Check indegree, not outdegree
                     queue.append((y, x))
         
+        # Process in topological order (sources → sinks)
         while queue:
             y, x = queue.popleft()
             
+            # Push this cell's accumulation to its DOWNSTREAM receiver
             code = flow_direction[y, x]
             if code != 0:
                 dy, dx = D8_DECODE.get(code, (0, 0))
                 ny, nx = y + dy, x + dx
                 
                 if 0 <= ny < h and 0 <= nx < w:
-                    accumulation[ny, nx] += accumulation[y, x]
-                    outdegree[ny, nx] -= 1
-                    if outdegree[ny, nx] == 0:
+                    accumulation[ny, nx] += accumulation[y, x]  # Propagate accumulation
+                    indegree[ny, nx] -= 1  # Decrement receiver's indegree
+                    if indegree[ny, nx] == 0:  # Check indegree
                         queue.append((ny, nx))
         
         self._log(f"Flow accumulation computed: max={np.max(accumulation):.0f}px, mean={np.mean(accumulation):.1f}px")
@@ -945,6 +949,111 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         return True
 
     def _build_feature_connectivity_graph(self, features: List[TerrainFeature], 
+                                   cost_surface: np.ndarray) -> Dict[str, Set[str]]:
+        """
+        A* based Connectivity Graph
+        
+        OPTIMIZATIONS:
+        1. A* with Euclidean heuristic (not blind Dijkstra)
+        2. Early termination when heuristic exceeds max_cost
+        3. Only compute i→j, mirror to j→i (no duplicate work)
+        4. Pre-filter candidates by cost heuristic before pathfinding
+        5. Bounded search ellipse (don't explore entire grid)
+        """
+        from scipy.spatial import KDTree
+        import heapq
+        
+        h, w = cost_surface.shape
+        connectivity = {f.feature_id: set() for f in features}
+        
+        if len(features) < 2:
+            return connectivity
+        
+        # Build spatial index ONCE
+        feature_coords = np.array([(f.centroid[0], f.centroid[1]) for f in features], dtype=np.int32)
+        feature_ids = [f.feature_id for f in features]
+        feature_tree = KDTree(feature_coords)
+        
+        radius_px = self._connection_radius_px
+        max_cost = self.config.connectivity_max_cost
+        
+        # Pre-compute median cost for heuristic estimation
+        median_cost = np.median(cost_surface)
+        
+        self._log(f"Building connectivity graph: {len(features)} features, "
+                  f"radius={radius_px:.1f}px, max_cost={max_cost:.1f}")
+        
+        # Track processed pairs to avoid duplicate work
+        processed_pairs = set()
+        total_paths = 0
+        connected_count = 0
+        
+        for i, f1 in enumerate(features):
+            x1, y1 = f1.centroid
+            fid1 = f1.feature_id
+            
+            # Query nearby features within radius
+            indices = feature_tree.query_ball_point([x1, y1], r=radius_px)
+            
+            # Filter: only j > i (avoid duplicate bidirectional work)
+            candidates = [idx for idx in indices if idx > i]
+            
+            if not candidates:
+                continue
+            
+            # Pre-filter by cost heuristic (Euclidean * median_cost)
+            filtered_candidates = []
+            for j in candidates:
+                x2, y2 = feature_coords[j]
+                euclidean_dist = np.hypot(x2 - x1, y2 - y1)
+                estimated_cost = euclidean_dist * median_cost
+                
+                # Skip if even straight-line cost exceeds threshold
+                if estimated_cost <= max_cost * 1.5:  # 50% buffer for path deviation
+                    filtered_candidates.append((j, euclidean_dist))
+            
+            # Sort by distance (process easiest paths first)
+            filtered_candidates.sort(key=lambda x: x[1])
+            filtered_candidates = filtered_candidates[:self.config.connectivity_max_neighbors]
+            
+            if self.config.verbose:
+                self._log(f"    - {fid1}: {len(candidates)}→{len(filtered_candidates)} candidates")
+            
+            # Compute paths with A*
+            for j, _ in filtered_candidates:
+                f2 = features[j]
+                fid2 = f2.feature_id
+                x2, y2 = f2.centroid
+                
+                # Skip if already processed (shouldn't happen with idx > i, but safety check)
+                pair_key = tuple(sorted([fid1, fid2]))
+                if pair_key in processed_pairs:
+                    continue
+                
+                path_cost = self._astar_path_cost(
+                    cost_surface, (x1, y1), (x2, y2), max_cost
+                )
+                
+                total_paths += 1
+                
+                if path_cost is not None and path_cost <= max_cost:
+                    connectivity[fid1].add(fid2)
+                    connectivity[fid2].add(fid1)  # Mirror the connection
+                    connected_count += 1
+                    processed_pairs.add(pair_key)
+            
+            if self.config.verbose and (i + 1) % 50 == 0:
+                self._log(f"  Connectivity: processed {i+1}/{len(features)} features, "
+                         f"{connected_count} connections so far")
+        
+        edges = sum(len(v) for v in connectivity.values()) // 2
+        self._log(f"Connectivity graph: {connected_count}/{len(features)} features connected, "
+                  f"{edges} edges, {total_paths} paths computed")
+        
+        return connectivity
+    
+    # Obsolete (too cpu expensive)
+    def _build_feature_connectivity_graph_dijkstra(self, features: List[TerrainFeature], 
                                       cost_surface: np.ndarray) -> Dict[str, Set[str]]:
         """
         MAP: Features → Connectivity Graph
@@ -1020,7 +1129,120 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         self._log(f"Connectivity graph: {connected_features}/{len(features)} features connected, {edges} edges")
         
         return connectivity
-
+    
+    #     
+    # HELPERS
+    #
+    
+    def _astar_path_cost(self, cost_surface: np.ndarray, 
+                     start: PixelCoord, 
+                     goal: PixelCoord,
+                     max_cost: float = float('inf')) -> Optional[float]:
+        """
+        A* pathfinding with Euclidean distance heuristic.
+        
+        OPTIMIZATIONS vs Dijkstra:
+        1. Heuristic guides search toward goal (fewer explored pixels)
+        2. Early termination when f_score > max_cost
+        3. Bounded search: don't explore pixels beyond reasonable detour
+        
+        Returns total cost or None if unreachable/too expensive.
+        """
+        import heapq
+        
+        h, w = cost_surface.shape
+        sx, sy = start
+        gx, gy = goal
+        
+        # Quick check: same cell
+        if (sx, sy) == (gx, gy):
+            return 0.0
+        
+        # Quick check: out of bounds
+        if not (0 <= sx < w and 0 <= sy < h and 0 <= gx < w and 0 <= gy < h):
+            return None
+        
+        # 8-direction neighbors with movement costs
+        NEIGHBORS = [
+            (0, 1, 1.0),    # E
+            (1, 1, 1.414),  # SE (√2)
+            (1, 0, 1.0),    # S
+            (1, -1, 1.414), # SW
+            (0, -1, 1.0),   # W
+            (-1, -1, 1.414),# NW
+            (-1, 0, 1.0),   # N
+            (-1, 1, 1.414), # NE
+        ]
+        
+        # Heuristic: Euclidean distance * minimum possible cost
+        min_cost = np.min(cost_surface)
+        def heuristic(x, y):
+            return np.hypot(x - gx, y - gy) * min_cost
+        
+        # Priority queue: (f_score, g_score, x, y)
+        # f = g + h (total estimated cost)
+        # g = actual cost so far
+        initial_h = heuristic(sx, sy)
+        pq = [(initial_h, 0.0, sx, sy)]
+        
+        # Track best g_score for each pixel
+        g_scores = np.full((h, w), np.inf, dtype=np.float32)
+        g_scores[sy, sx] = 0.0
+        
+        # Bounding box with buffer (don't search entire grid)
+        search_radius = int(max_cost / min_cost) if min_cost > 0 else max(h, w)
+        y_min, y_max = max(0, sy - search_radius), min(h, sy + search_radius)
+        x_min, x_max = max(0, sx - search_radius), min(w, sx + search_radius)
+        
+        visited_count = 0
+        max_visited = (x_max - x_min) * (y_max - y_min) * 0.5  # Don't explore >50% of bounds
+        
+        while pq:
+            f, g, x, y = heapq.heappop(pq)
+            
+            # Early termination: already found better path to this pixel
+            if g > g_scores[y, x]:
+                continue
+            
+            # Early termination: exceeded max cost
+            if g > max_cost:
+                continue
+            
+            # Early termination: reached goal
+            if (x, y) == (gx, gy):
+                return g
+            
+            # Safety limit: don't explore too many pixels
+            visited_count += 1
+            if visited_count > max_visited:
+                return None
+            
+            # Explore neighbors
+            for dy, dx, move_cost in NEIGHBORS:
+                nx, ny = x + dx, y + dy
+                
+                # Bounds check (use pre-computed bounding box)
+                if nx < x_min or nx >= x_max or ny < y_min or ny >= y_max:
+                    continue
+                
+                # Cost to move to neighbor
+                step_cost = cost_surface[ny, nx] * move_cost
+                new_g = g + step_cost
+                
+                # Prune if already exceeds max_cost
+                if new_g > max_cost:
+                    continue
+                
+                # Update if better path found
+                if new_g < g_scores[ny, nx]:
+                    g_scores[ny, nx] = new_g
+                    h = heuristic(nx, ny)
+                    f = new_g + h
+                    heapq.heappush(pq, (f, new_g, nx, ny))
+        
+        # No path found within max_cost
+        return None
+    
     def _dijkstra_path_cost(self, cost_surface: np.ndarray, 
                             start: PixelCoord, 
                             goal: PixelCoord,

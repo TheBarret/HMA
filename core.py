@@ -191,15 +191,15 @@ class PipelineConfig:
 
     # --- Flow Network ---
     flow_direction_method: str = "d8"              # ['d8'] supported: d8 only
-    stream_accumulation_threshold_px: int = 10     # [10-500] pixels
+    stream_accumulation_threshold_px: int = 65     # [10-500] pixels
     feature_snap_distance_px: int = 10             # [5-20] pixels
     snap_method: str = "nearest"                   # ["nearest", "flow_directed", "none"]
     flat_resolution_method: str = "priority_flood" # ["priority_flood", "depression_fill"]
     include_edge_basins: bool = True               # include basins draining off-map
 
     # --- Connectivity ---
-    connection_radius_m: float = 150.0              # [50-500] meters
-    connectivity_max_neighbors: int = 10           # [10-50] max graph degree
+    connection_radius_m: float = 128.0              # [50-500] meters
+    connectivity_max_neighbors: int = 16           # [4-50] max graph degree
     vehicle_climb_angle: float = 25.0              # [20-45] degrees
     cliff_threshold_degrees: float = 45.0          # [30-60] degrees
 
@@ -214,8 +214,12 @@ class PipelineConfig:
     ridge_visibility_scale: float = 0.8            # Scale factor for ridge observer height
 
     # --- Pathfinding ---
-    connectivity_max_cost: float = 2500.0         # float('inf') or maximum allowed path cost (ref: dijkstra path cost)
-
+    connectivity_max_cost: float = 1500.0        # float('inf') or maximum allowed path cost
+    connectivity_use_astar: bool = True          # [bool]
+    connectivity_search_buffer: float = 1.5      # Heuristic buffer for candidate filtering
+    connectivity_max_visited_ratio: float = 0.3  # Max % of search space to explore
+    connectivity_parallel: bool = False          # Enable multiprocessing (future)
+    
     # --- Watersheds ---
     watershed_min_area_m2: float = 250.0           # [500-10000] m²
     min_basin_outlet_prominence_m: float = 5.0     # [2-20] meters
@@ -225,6 +229,7 @@ class PipelineConfig:
     
     # --- Fallbacks ---
     skimage_stream_min_size_px: int = 10           # extract_stream_network() -> skimage.morphology.remove_small_objects(<object>, <size>)
+    
     
     
     # =========================================================================
