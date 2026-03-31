@@ -26,7 +26,10 @@ Relations are derived from continuous mathematical fields, onto which features a
    - Assign Features to Basins, Build Feature Graphs  
 
 
-<img width="1024" src="https://github.com/user-attachments/assets/421c5e97-b9e1-442d-89b7-7170cd34070c" />
+<img width="1024" src="https://github.com/user-attachments/assets/421c5e97-b9e1-442d-89b7-7170cd34070c" />  
+  
+<img width="1024" src="https://github.com/user-attachments/assets/35bf49e0-cbe8-4f0e-96cb-176c2bf7c478" />  
+
 
 # LLM Friendly context summary (PLANNED FEATURE, WIP...)
 
