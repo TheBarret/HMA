@@ -684,7 +684,7 @@ class Pipeline:
         raise RuntimeError("Pipeline has no return object [AnalyzedTerrain]")
         
 #
-#  Finalizing to an analyzed terrain object
+#  Finalizing to an analyzed terrain object (LLM CONTEXT)
 #  
 @dataclass
 class AnalyzedTerrain:
@@ -1072,28 +1072,28 @@ class Datacache:
         """Combine multiple hash strings into a single cache key."""
         combined = "".join(hashes)
         combined_sum = hashlib.sha256(combined.encode()).hexdigest()[:16]
-        print(f'[cache] hashing: {combined_sum }')
+        #print(f'[cache] hashing: {combined_sum }')
         return combined_sum 
     
     def exists(self, cache_id: str, name: str, extension: str) -> bool:
         """Check if a cache file exists."""
         file_path = self.cache_dir / f"{cache_id}.{self.layer_name}.{name}.{extension}"
         file_exists = file_path.exists()
-        print(f'[cache] seek: {file_path}, exists={file_exists}')
+        #print(f'[cache] seek: {file_path}, exists={file_exists}')
         return file_exists
     
     def save_json(self, cache_id: str, name: str, data: dict) -> None:
         """Save metadata as JSON."""
         self._ensure_dir()
         path = self.cache_dir / f"{cache_id}.{self.layer_name}.{name}.json"
-        print(f'[cache] writing: {path}...')
+        #print(f'[cache] writing: {path}...')
         with open(path, 'w') as f:
             json.dump(data, f, indent=2)
     
     def load_json(self, cache_id: str, name: str) -> dict:
         """Load metadata JSON."""
         path = self.cache_dir / f"{cache_id}.{self.layer_name}.{name}.json"
-        print(f'[cache] reading: {path}...')
+        #print(f'[cache] reading: {path}...')
         with open(path, 'r') as f:
             return json.load(f)
     
@@ -1139,7 +1139,7 @@ class Datacache:
         Reconstructs the same structure passed to save_h5.
         """
         path = self.cache_dir / f"{cache_id}.{self.layer_name}.{name}.h5"
-        print(f'[cache] reading: {path}...')
+        #print(f'[cache] reading: {path}...')
         result = {}
         with h5py.File(path, 'r') as f:
             def _visit(key, obj):

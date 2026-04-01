@@ -10,6 +10,7 @@ from topological import Layer3_TopologicalFeatures
 from relational import Layer4_Relational
 from semantics import Layer5_Semantics
 from visualizer import render
+from tools import SelfTest
 #from context import TerrainContext
 
 """
@@ -17,7 +18,12 @@ from visualizer import render
    
 """
 
-def run_pipeline(png_path: str, config: PipelineConfig) -> Dict:
+def run_pipeline(png_path: str, config: PipelineConfig, selfcheck: bool = False) -> Dict:
+    """ self check """
+    
+    self_test = SelfTest(config)
+    self_test.run()
+    
     """Execute full pipeline, return all outputs."""
     from PIL import Image
     
