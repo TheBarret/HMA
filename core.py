@@ -104,12 +104,12 @@ class PipelineConfig:
     # =========================================================================
     
     horizontal_scale: float = 2.0           # [0.5-10.0] meters per pixel
-    vertical_scale: float = 0.492             # [0.05-1.0] meters per grayscale unit [0.392]
+    vertical_scale: float = 0.492             # [0.05-1.0] meters per grayscale unit [default: 0.392]
     sea_level_offset: float = 0.1          # [0-100] meters, base elevation
     noise_reduction_sigma: float = 1.0      # [0.5-5.0] Gaussian blur strength
     max_elevation_range: int = 10000        # max elevation bounds [10km range]
     histogram_bins: int = 50                # histogram quantizing pool
-    std_gaussian: float = 0.6745            # stddev conversion factor for a Gaussian [0.6745]
+    std_gaussian: float = 0.6745            # stddev conversion factor for a Gaussian [default: 0.6745]
     
     
     # =========================================================================
@@ -152,7 +152,7 @@ class PipelineConfig:
     peak_confidence : float = 20.0              # [0-50] Peak confidence
     min_peak_size_px: int = 1                   # [1-10] pixels, minimum peak footprint
     peak_min_prominence_m: float = 10.0          # [1-50] meters, minimum height above saddle
-    peak_nms_radius_px: int = 60               # [1-100] pixels, non-maximum suppression radius
+    peak_nms_radius_px: int = 30               # [1-100] pixels, non-maximum suppression radius [tweak this when saddles are too surpressed]
     peak_shoulder_convex_ratio: float = 0.12    # [0.01-0.3] n% convex pixels in annular ring
     peak_annular_inner_m: float = 2.0           # [2-15] meters, inner shoulder radius
     peak_annular_outer_m: float = 40.0          # [1-50] meters, outer shoulder radius
@@ -168,11 +168,11 @@ class PipelineConfig:
     
     # --- Saddles (passes between peaks) ---
     saddle_k_min_threshold: float = 0.00020     # [2.00e-4/m²] minimum |K| for saddle (1/m²)
-    saddle_confidence_threshold: float = 0.95    # [0.0-1.0] normalized confidence (1.0 = all)
+    saddle_confidence_threshold: float = 0.3    # [0.0-1.0] normalized confidence (1.0 = all)
 
     # --- Sea Level ---
     exclude_below_reference: bool = True         # [True/False] exclude sea domain features
-    elevation_reference_m: float = 5.0           # meters
+    elevation_reference_m: float = 1.5           # [0-10] in meters
         
     # --- General Topology ---
     border_margin_px: int = 10                   # [5-30] pixels, ignore edges
@@ -218,7 +218,7 @@ class PipelineConfig:
     connectivity_heuristic_buffer: float = 1.5   # heuristic_buffer                          [performance tweaker]
     
     # --- Watersheds ---
-    watershed_min_area_m2: float = 250.0           # [500-10000] m²
+    watershed_min_area_m2: float = 750.0           # [500-10000] m² (note: any lower at 500 at 2m/px scale = 62.5 pixels, may include noise basins)
     
     # --- Fallbacks ---
     skimage_stream_min_size_px: int = 10           # extract_stream_network() -> skimage.morphology.remove_small_objects(<object>, <size>)

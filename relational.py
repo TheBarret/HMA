@@ -1,24 +1,17 @@
 """
 Layer 4: Relational Analysis
 ==================================================
-ARCHITECTURAL PHILOSOPHY:
-This module adheres to Foundation.txt Section: "The Analysis Pipeline".
+Design:
 Relations are NOT derived from feature heuristics.
 Relations are derived from continuous mathematical fields, onto which features are mapped.
 
-PIPELINE FLOW PATH:
+Internal steps:
 1. Compute Pixel-Level Fields (Mathematics)
    - Flow Direction, Accumulation, Cost Surfaces
 2. Extract Relational Structures (Topology)
    - Stream Networks, Watershed Boundaries, Visibility Lines
 3. Map Discrete Features (Semantics)
    - Assign Features to Basins, Build Feature Graphs
-
-CHANGES:
-- Previous design projected flow from feature centroids (Hydrologically invalid).
-- Previous design counted features for area (Statistically meaningless).
-- Previous design sampled visibility (Geometrically inaccurate).
-- New design ensures "Mathematical Certainty" before "Semantic Interpretation".
 """
 
 import numpy as np
@@ -293,11 +286,6 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         
         # Step 1: Compute raw D8 flow direction (steepest descent)
         for y in range(h):
-            _acc += 1
-            if _acc % 16 == 0:
-                    self._log(f"       scanning: y = {y} of {h}...")
-            
-                    
             for x in range(w):
                 center_z = z[y, x]
                 max_drop = -np.inf
@@ -322,7 +310,10 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
                         best_dir = i + 1
                 
                 flow_direction[y, x] = best_dir if max_drop > 0 else 0
-       
+        _acc += 1
+        if _acc % 16 == 0:
+                self._log(f"       -> y={y} of {h}")
+                
         # Step 2: Priority-flood resolution for flat areas
         flow_direction = self._priority_flood_resolution(z, flow_direction, heightmap)
         
@@ -642,7 +633,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         # Filter by minimum area
         valid_basins = {}
         basin_areas_m2 = {}
-        
+        _acc = 0
         for bid, count in zip(basin_ids, basin_counts):
             # Skip invalid basins (negative labels)
             if bid < 0:
@@ -655,9 +646,10 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
                 basin_key = f"basin_{bid}"
                 valid_basins[bid] = basin_key
                 basin_areas_m2[basin_key] = area_m2
-                
-                if self.config.verbose:
-                    self._log(f"Basin {basin_key}: {count} pixels, {area_m2:.0f} m²")
+                _acc += 1
+                if self.config.verbose and (_acc % 32 == 1):
+                    self._log(f"Basin: {basin_key}, area_m2={area_m2}")
+                    #self._log(f"Basin {basin_key}: {count} pixels, {area_m2:.0f} m²")
         
         if len(valid_basins) == 0:
             self._log(f"Warning: No basins meet minimum area {self.config.watershed_min_area_m2:.0f} m²")
@@ -766,7 +758,17 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
                 dy, dx = D8_DECODE.get(code, (0, 0))
                 next_x, next_y = current_x + dx, current_y + dy
                 
-                # Check if we've entered a cycle
+                
+                # Check if we've entered a cycle,
+                # the issue is that for long flow paths (common in large basins), this becomes O(n²)
+                
+                # proposed:
+                #trace_path_set = {(x, y)}  # Use set for O(1) lookup
+                #if (next_x, next_y) in trace_path_set:
+                #    break
+                #trace_path_set.add((next_x, next_y))
+                
+                # This works too but needs an evaluation
                 if (next_x, next_y) in trace_path:
                     self._log(f"Cycle detected in flow path for feature {feature.feature_id}")
                     break
@@ -935,13 +937,22 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
                     z
                 )
                 
+                # Problematic: assumes symmetry
                 if visible_1_to_2:
                     visibility[f1.feature_id].add(f2.feature_id)
                     visibility[f2.feature_id].add(f1.feature_id)
                     visible_pairs += 1
                 
-                if self.config.verbose and checked % 1000 == 0:
-                    self._log(f"Visibility checks: {checked}, visible: {visible_pairs}")
+                # Suggestion: do a check on both ends, only proceed when true
+                #visible_1_to_2 = self._check_line_of_sight(f1_obs, f2_tgt, z)
+                #visible_2_to_1 = self._check_line_of_sight(f2_obs, f1_tgt, z)
+                #if visible_1_to_2:
+                #    visibility[f1.feature_id].add(f2.feature_id)
+                #if visible_2_to_1:
+                #    visibility[f2.feature_id].add(f1.feature_id)
+                
+                if self.config.verbose and checked % 1024 == 1:
+                    self._log(f"Visibility checking, verified={checked}, visible_pairs={visible_pairs}")
         
         self._log(f"Visibility graph complete: {checked} checks, {visible_pairs} visible pairs")
         
@@ -1031,6 +1042,11 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
             total_pairs_considered += len(filtered_targets)
             
             # Multi-target Dijkstra
+            # Possible issue: If Layer 4 instance runs multiple times in same session, 
+            # version tracking works correctly. However, if you create multiple instances of the layer, 
+            # each has its own _current_version counter starting at 0.
+            # Only matters if you instantiate multiple Layer4 objects and reuse them. Single-instance pipeline is safe.
+            
             self._current_version += 1
             version = self._current_version
             
@@ -1042,7 +1058,8 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
             remaining_targets = set(filtered_targets)
             settled_costs = {}
             
-            self._log(f"    #{i} [{source_id}] pairs={total_pairs_considered}")
+            if i % 64 == 1:
+                self._log(f"    #{i} [{source_id}] pairs={total_pairs_considered}")
             
             while pq and remaining_targets:
                 cost, x, y = heapq.heappop(pq)
@@ -1088,11 +1105,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
                     connectivity[source_id].add(target_id)
                     connectivity[target_id].add(source_id)
                     total_connections += 1
-            
-            if self.config.verbose and (i + 1) % 50 == 0:
-                self._log(f"* Processed {i+1}/{len(features)} features, "
-                         f"{total_connections} connections")
-        
+              
         edges = sum(len(v) for v in connectivity.values()) // 2
         connected_features = sum(1 for v in connectivity.values() if v)
         

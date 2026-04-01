@@ -91,7 +91,7 @@ def main():
     # Setup config
     config = PipelineConfig()
     config.verbose = True
-    run_pipeline('./assets/heightmap_large.png', config)
+    run_pipeline('./assets/spike.png', config)
 
 
 # =============================================================================

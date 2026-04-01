@@ -90,7 +90,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             self._log(f"No features detected, seal-level parameters might be too aggressive")
             
         if self.config.verbose and original_count != len(features):
-            self._log(f"sea-level filter: {original_count} → {len(features)} features ({original_count - len(features)} removed)")
+            self._log(f"Sea-level filter: ref={self.config.elevation_reference_m}m, {original_count} → {len(features)} features ({original_count - len(features)} removed)")
             
         # commit
         self._build_feature_hierarchy(features)
@@ -146,9 +146,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 # track filtered features for debugging
                 feature.metadata['filtered_reason'] = f'below_reference_{ref}m'
         
-        if self.config.verbose and filtered_count > 0:
-            self._log(f"Purged {filtered_count} features below {ref}m reference")
-        
         return filtered
 
     def _calculate_confidence_weights(self, gaussian_curvature: ScalarField) -> np.ndarray:
@@ -195,9 +192,12 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         shoulder_radius_inner = max(2, int(self.config.peak_annular_inner_m / cell_size)) 
         shoulder_radius_outer = max(10, int(self.config.peak_annular_outer_m / cell_size)) 
 
-        # --- PATCH: hoist grid creation outside the candidate loop ---
+        # hoist grid creation outside the candidate loop ---
         y_grid, x_grid = np.ogrid[:z.shape[0], :z.shape[1]]
-
+        
+        self._log(f"shoulder radius: inner={shoulder_radius_inner}, outer={shoulder_radius_outer}")
+        
+        
         validated_count = 0
         for i in range(1, num_candidates + 1):
             peak_pixels = np.argwhere(labeled_peaks == i)
@@ -501,7 +501,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         tree = KDTree(coords)
         suppressed = np.zeros(len(candidate_xs), dtype=bool)
         radius_px = self.config.peak_nms_radius_px  # Reuse NMS radius
-        
+
         for idx in sorted_idx:
             if suppressed[idx]:
                 continue
@@ -519,27 +519,32 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         # Apply both thresholds
         k_threshold = self.config.saddle_k_min_threshold
         confidence_threshold = self.config.saddle_confidence_threshold
-        self._log(f"Saddle parameters: k_threshold={k_threshold:.2e}, confidence_threshold={confidence_threshold:.2f}")
+        # debug trackers
+        _rej1 = 0
+        _rej2 = 0
         
         if len(final_k) > 0:
-            self._log(f"Saddle statistics: K min={np.min(final_k):.2e}, K max={np.max(final_k):.2e}, "
-                      f"K threshold={k_threshold:.2e}, confidence threshold={confidence_threshold:.2f}")
-        
+            self._log(f" * final_k={len(final_k)}, final_k_min={np.min(final_k):.2e}, final_k_max={np.max(final_k):.2e}. k_threshold={k_threshold:.2e}")
+            self._log(f" * confidence_threshold={confidence_threshold:.2f}")
+            self._log(f" * query_ball_point(NMS_radius={radius_px})")
         validated_count = 0
+       
         for cx, cy, k_mag, conf in zip(final_xs, final_ys, final_k, final_conf):
             # Apply both filters: must meet OR exceed thresholds
             if k_mag < k_threshold:
+                #self._log(f" saddle({cx},{cy}): k_mag < k_threshold [rejected]")
+                _rej1 += 1
                 continue
             if conf < confidence_threshold:
+                #self._log(f" saddle({cx},{cy}): conf < confidence_threshold [rejected]")
+                _rej2 += 1
                 continue
-            elevation = float(z[cy, cx])
             
+            elevation = float(z[cy, cx])
             saddle = SaddleFeature(
                 centroid=(int(cx), int(cy)),
                 elevation_range=(elevation, elevation),
                 saddle_elevation_m=elevation,
-                #REMOVED: connecting_ridges=set(),
-                #REMOVED: connecting_valleys=set(),
                 k_curvature=float(gaussian_curvature[cy, cx]),
                 feature_type=FeatureType.SADDLE,
                 confidence=float(conf),
@@ -552,7 +557,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             )
             saddles.append(saddle)
             validated_count += 1
-        
+        self._log(f"Thresholds hits: (k_mag < k_threshold)={_rej1}, (conf < confidence_threshold)={_rej2}")
         return saddles
 
     def _extract_flat_zones(self, heightmap: Heightmap, curvature_type: np.ndarray,
@@ -576,11 +581,16 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         labeled, num_features = label(flat_mask)
         self._log(f"Flat zone candidates: {num_features} (min_size={self.config.min_flat_zone_size_px}px)")
         
+        # debug trackers
+        _rej1 = 0
         validated_count = 0
+        
+        
         for i in range(1, num_features + 1):
             mask = (labeled == i)
             size = np.sum(mask)
             if size < self.config.min_flat_zone_size_px:
+                _rej1 += 1
                 continue
 
             ys, xs = np.where(mask)
@@ -618,7 +628,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             )
             flat_zones.append(flat_zone)
             validated_count += 1
-        
+        self._log(f"Thresholds hits: (size < min_flat_zone_size_px)={_rej1}")
         self._log(f"Flat zones validated: {validated_count}")
         return flat_zones
 
@@ -774,7 +784,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                                tolerance: float) -> Set[str]:
         """Find peak IDs connected to this ridge via endpoint proximity."""
         connected = set()
-
+        self._log(f"Scanning for connected peaks, tolerance={tolerance}")
         if len(spine_points) < 2 or peak_tree is None:
             return connected
 
@@ -786,7 +796,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 connected.add(peaks[idx].feature_id)
 
         if connected:
-            self._log(f'found {len(connected)} peaks connected to ridge endpoint, tolerance={tolerance}')
+            self._log(f'Discovered {len(connected)} peak(s)...')
 
         return connected
 
