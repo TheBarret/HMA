@@ -67,6 +67,14 @@ class SyntheticTerrain:
         # Initialize empty heightmap (sea level)
         self.z = np.full((size_px, size_px), self.sea_level, dtype=np.float32)
         self.ground_truth: List[GroundTruthFeature] = []
+        
+        # gentle tilt to avoid perfectly flat terrain (prevents gradient issues)
+        # Tilt: 0.5m rise across map width = ~0.22° slope
+        x = np.linspace(-1, 1, size_px)
+        y = np.linspace(-1, 1, size_px)
+        xx, yy = np.meshgrid(x, y)
+        tilt = xx * 0.5  # 0.5m from left to right edge
+        self.z += tilt
     
     def _meters_to_pixels(self, meters: float) -> float:
         """Convert world meters to pixels at current horizontal scale."""
