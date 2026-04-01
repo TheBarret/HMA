@@ -315,10 +315,10 @@ def _plot_topology_features(ax, features: List[TerrainFeature],
     if saddle_x:
         ax.scatter(saddle_x, saddle_y,
                   marker='s',
-                  s=28,
+                  s=8,
                   c=NATO['saddle_mark'],
                   edgecolor=NATO['paper'],
-                  linewidth=0.8,
+                  linewidth=0.5,
                   zorder=9,
                   alpha=0.9,
                   label='_nolegend_')
@@ -688,8 +688,7 @@ def plot_layer4_cost_surface(ax, cost_surface: np.ndarray,
                              alpha: float = 0.05):
     """
     Render traversability cost as heatmap overlay.
-    
-    OPTIMIZATION: Downsample for rendering, use perceptual colormap.
+    Downsample for rendering, use perceptual colormap.
     """
     # Downsample if too large
     if cost_surface.shape[0] > 512:
@@ -876,6 +875,8 @@ def _draw_legend(ax, relational: dict, features: List[TerrainFeature],
         for text in legend.get_texts():
             text.set_color(NATO['text'])
             text.set_fontfamily('monospace')
+        
+        legend.set_zorder(20)
         
         return legend
     

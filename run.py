@@ -10,23 +10,16 @@ from topological import Layer3_TopologicalFeatures
 from relational import Layer4_Relational
 from semantics import Layer5_Semantics
 from visualizer import render
-from tools import SelfTest
-#from context import TerrainContext
 
-"""
-    HMA Staging script (testrig)
-   
-"""
-
-def run_pipeline(png_path: str, config: PipelineConfig, selfcheck: bool = False) -> Dict:
-    """ self check """
+def run_pipeline(png_path: str, config: PipelineConfig, selfcheck: bool = False):
+    #""" self check """
+    if selfcheck:
+        from tools import SelfTest
+        self_test = SelfTest(config)
+        self_test.run()
+        return
     
-    self_test = SelfTest(config)
-    self_test.run()
-    
-    """Execute full pipeline, return all outputs."""
     from PIL import Image
-    
     raw = np.array(Image.open(png_path).convert('L'))
     
     # Layer 0
@@ -69,21 +62,6 @@ def run_pipeline(png_path: str, config: PipelineConfig, selfcheck: bool = False)
         save_path=f"{map_name}_topology.png",
         dpi=180
     )
-    #return {'heightmap': heightmap, 'features': features}
-    
-   
-    
-    # Layer 5
-    #layer5 = Layer5_Semantics(config)
-    #analyzed = layer5.execute(bundle)
-    
-    #return {
-    #   'heightmap': heightmap.data,
-    #   'features': features,
-    #   'relational': relational,
-    #   'analyzed': analyzed,
-    #   'semantic_index': analyzed.semantic_index,
-    #}
     return
     
 
@@ -97,7 +75,7 @@ def main():
     # Setup config
     config = PipelineConfig()
     config.verbose = True
-    run_pipeline('./assets/spike.png', config)
+    run_pipeline('./assets/3point.png', config)
 
 
 # =============================================================================

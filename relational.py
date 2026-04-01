@@ -622,7 +622,6 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
             - horizontal_scale: For area calculation
         """
         from collections import defaultdict
-        
         h, w = watershed_labels.shape
         cell_area_m2 = self.config.horizontal_scale ** 2
         min_area_px = self._watershed_min_area_px  # Already converted in __init__
@@ -633,7 +632,11 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
         # Filter by minimum area
         valid_basins = {}
         basin_areas_m2 = {}
+        
+        # debug trackers
         _acc = 0
+        _volume = 0
+        
         for bid, count in zip(basin_ids, basin_counts):
             # Skip invalid basins (negative labels)
             if bid < 0:
@@ -646,14 +649,15 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
                 basin_key = f"basin_{bid}"
                 valid_basins[bid] = basin_key
                 basin_areas_m2[basin_key] = area_m2
+                _volume += area_m2
                 _acc += 1
-                if self.config.verbose and (_acc % 32 == 1):
-                    self._log(f"Basin: {basin_key}, area_m2={area_m2}")
-                    #self._log(f"Basin {basin_key}: {count} pixels, {area_m2:.0f} m²")
         
         if len(valid_basins) == 0:
             self._log(f"Warning: No basins meet minimum area {self.config.watershed_min_area_m2:.0f} m²")
             return {}
+            
+        if self.config.verbose:
+            self._log(f"Basins: {_acc} found with a total of {_volume}m²")
         
         # Step 2: Assign features to basins
         feature_watersheds = {basin_key: set() for basin_key in valid_basins.values()}
@@ -1058,7 +1062,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
             remaining_targets = set(filtered_targets)
             settled_costs = {}
             
-            if i % 64 == 1:
+            if i % 16 == 0:
                 self._log(f"    #{i} [{source_id}] pairs={total_pairs_considered}")
             
             while pq and remaining_targets:

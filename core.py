@@ -134,7 +134,7 @@ class PipelineConfig:
     #    Rolling Hills	 |  60-70               | Moderate features, need sensitivity
     #    Sparse Features |  50-60               | Isolated ridges/valleys on flat terrain (default)
     #    Urban/Man-made  |  80-90               | Sharp edges dominate, filter out noise
-    adaptive_percentile: float = 62.0
+    adaptive_percentile: float = 58.0
     
     # prevent over-deflation
     curvature_epsilon_h_min: float = 0.00005     # [1e-6-1e-2] minimum mean curvature (1/m)
@@ -150,10 +150,11 @@ class PipelineConfig:
     
     # --- Peaks (local maxima with convex surroundings) ---
     peak_confidence : float = 20.0              # [0-50] Peak confidence
+    peak_min_shoulder_samples: int = 10         # [5-50] minimum pixels in shoulder region
     min_peak_size_px: int = 1                   # [1-10] pixels, minimum peak footprint
     peak_min_prominence_m: float = 10.0          # [1-50] meters, minimum height above saddle
     peak_nms_radius_px: int = 30               # [1-100] pixels, non-maximum suppression radius [tweak this when saddles are too surpressed]
-    peak_shoulder_convex_ratio: float = 0.12    # [0.01-0.3] n% convex pixels in annular ring
+    peak_shoulder_convex_ratio: float = 0.08    # [0.01-0.3] n% convex pixels in annular ring
     peak_annular_inner_m: float = 2.0           # [2-15] meters, inner shoulder radius
     peak_annular_outer_m: float = 40.0          # [1-50] meters, outer shoulder radius
     peak_smooth_sigma: float = 2.5              # ndimage.gaussian_filter(z, sigma)
@@ -163,12 +164,12 @@ class PipelineConfig:
     min_valley_length_px: int = 10               # [3-20] pixels, minimum valley length
     
     # --- Flat Zones (traversable areas) ---
-    min_flat_zone_size_px: int = 150            # [50-500] pixels, minimum flat area
-    flat_zone_slope_threshold_deg: float = 4.0  # [1-10] degrees, max slope for "flat"
+    min_flat_zone_size_px: int = 80            # [50-500] pixels, minimum flat area
+    flat_zone_slope_threshold_deg: float = 5.0  # [1-10] degrees, max slope for "flat"
     
     # --- Saddles (passes between peaks) ---
     saddle_k_min_threshold: float = 0.00020     # [2.00e-4/m²] minimum |K| for saddle (1/m²)
-    saddle_confidence_threshold: float = 0.3    # [0.0-1.0] normalized confidence (1.0 = all)
+    saddle_confidence_threshold: float = 0.50    # [0.0-1.0] normalized confidence (1.0 = all)
 
     # --- Sea Level ---
     exclude_below_reference: bool = True         # [True/False] exclude sea domain features
@@ -191,13 +192,21 @@ class PipelineConfig:
 
     # --- Flow Network ---
     flow_direction_method: str = "d8"              # ['d8'] supported: d8 only
-    stream_accumulation_threshold_px: int = 65     # [10-500] pixels
-    feature_snap_distance_px: int = 10             # [5-20] pixels
+    stream_accumulation_threshold_px: int = 120     # [10-500] pixels
+    feature_snap_distance_px: int = 20             # [5-20] pixels
     snap_method: str = "nearest"                   # ["nearest", "flow_directed", "none"]
     include_edge_basins: bool = True               # include basins draining off-map
 
     # --- Connectivity ---
-    connection_radius_m: float = 50.0              # [50-500] meters                        [performance tweaker]
+    
+    # Connection Radius/Pixels [Performance tweaker]
+    # Radius	| Pixels per source	    | Total expansions | Performance
+    # 50m       | ~1,963	            | 1.47M	           | Default
+    # 40m       | ~1,256	            | 942K	           | 36% reduction
+    # 30m       | ~706	                | 530K	           | 64% reduction
+    # 25m       | ~490	                | 368K	           | 75% reduction
+    connection_radius_m: float = 40.0              # [1-1000] meters
+    
     connectivity_max_neighbors: int = 16           # [4-50] max graph degree
     vehicle_climb_angle: float = 25.0              # [20-45] degrees
     cliff_threshold_degrees: float = 45.0          # [30-60] degrees

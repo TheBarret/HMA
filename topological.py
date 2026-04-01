@@ -87,7 +87,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         original_count = len(features)
         features = self._purge_sea_domain(features)
         if (original_count - len(features)) == 0:
-            self._log(f"No features detected, seal-level parameters might be too aggressive")
+            self._log(f"No features detected")
             
         if self.config.verbose and original_count != len(features):
             self._log(f"Sea-level filter: ref={self.config.elevation_reference_m}m, {original_count} → {len(features)} features ({original_count - len(features)} removed)")
@@ -195,13 +195,18 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         # hoist grid creation outside the candidate loop ---
         y_grid, x_grid = np.ogrid[:z.shape[0], :z.shape[1]]
         
-        self._log(f"shoulder radius: inner={shoulder_radius_inner}, outer={shoulder_radius_outer}")
+        self._log(f"Shoulder radius: inner={shoulder_radius_inner}, outer={shoulder_radius_outer}")
         
-        
+        # debug trackers
+        _rej1 = 0
+        _rej2 = 0
+        _rej3 = 0
+        _rej4 = 0
         validated_count = 0
         for i in range(1, num_candidates + 1):
             peak_pixels = np.argwhere(labeled_peaks == i)
             if len(peak_pixels) < self._min_feature_size:
+                _rej1 += 1
                 continue
 
             centroid_y, centroid_x = peak_pixels.mean(axis=0).astype(int)
@@ -210,7 +215,9 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             shoulder_mask = (dist >= shoulder_radius_inner) & (dist <= shoulder_radius_outer)
 
             shoulder_types = curvature_type[shoulder_mask]
-            if len(shoulder_types) < 10:
+            
+            if len(shoulder_types) < self.config.peak_min_shoulder_samples:
+                _rej2 += 1
                 continue
 
             convex_count = np.sum(
@@ -229,7 +236,13 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                         method="curvature_annular"
                     ))
                     validated_count += 1
+                else: 
+                    _rej3 += 1
+            else:
+                _rej4 += 1
         
+        self._log(f"Thresholds hits: (len(peak_px) < min_feature_size)={_rej1}, (len(shoulder_types) < peak_min_shoulder_samples)={_rej2}")
+        self._log(f"Thresholds hits: (convex_ratio > peak_shoulder_convex_ratio)={_rej3}, (prominence > peak_min_prominence_m)={_rej4}")
         self._log(f"Peaks validated: {validated_count} (convex_ratio threshold={self.config.peak_shoulder_convex_ratio})")
 
         if len(peaks) == 0:
@@ -333,12 +346,15 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         
         self._log(f"Ridge candidates: {num_features} (min_length={self._min_ridge_length}px)")
         
+        # debug trackers
+        _rej1 = 0
         validated_count = 0
         for i in range(1, num_features + 1):
             mask = (labeled == i)
             ys, xs = np.where(mask)
 
             if len(xs) < self._min_ridge_length:
+                _rej1 += 1
                 continue
 
             spine_points = self._order_spine_points(xs, ys)
@@ -376,7 +392,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             ridge._avg_slope = float(avg_slope)
             ridges.append(ridge)
             validated_count += 1
-        
+        self._log(f"Thresholds hits: (len(xs) < min_ridge_length_px)={_rej1}")
         self._log(f"Ridges validated: {validated_count}")
         return ridges
 
@@ -410,12 +426,15 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         
         self._log(f"Valley candidates: {num_features} (min_length={self._min_ridge_length}px)")
         
+        # debug trackers
+        _rej1 = 0
         validated_count = 0
         for i in range(1, num_features + 1):
             mask = (labeled == i)
             ys, xs = np.where(mask)
 
             if len(xs) < self._min_ridge_length:
+                _rej1 += 1
                 continue
 
             spine_points = self._order_spine_points(xs, ys)
@@ -451,6 +470,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             valleys.append(valley)
             validated_count += 1
         
+        self._log(f"Thresholds hits: (len(xs) < min_ridge_length_px)={_rej1}")
         self._log(f"Valleys validated: {validated_count}")
         return valleys
 
@@ -532,11 +552,9 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         for cx, cy, k_mag, conf in zip(final_xs, final_ys, final_k, final_conf):
             # Apply both filters: must meet OR exceed thresholds
             if k_mag < k_threshold:
-                #self._log(f" saddle({cx},{cy}): k_mag < k_threshold [rejected]")
                 _rej1 += 1
                 continue
             if conf < confidence_threshold:
-                #self._log(f" saddle({cx},{cy}): conf < confidence_threshold [rejected]")
                 _rej2 += 1
                 continue
             
@@ -784,7 +802,6 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                                tolerance: float) -> Set[str]:
         """Find peak IDs connected to this ridge via endpoint proximity."""
         connected = set()
-        self._log(f"Scanning for connected peaks, tolerance={tolerance}")
         if len(spine_points) < 2 or peak_tree is None:
             return connected
 
