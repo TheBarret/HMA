@@ -168,9 +168,6 @@ Or a `Near zero` one direction flat can be a Ridge (curved across, flat along), 
 [Topological] Flat zones extracted: 51
 [Topological] Sea-level filter: ref=1.5m, 289 → 274 features (15 removed)
 [Topological] Building feature hierarchy...
-[Topological] Scanning for connected peaks, tolerance=10.0
-...
-[Topological] Scanning for connected peaks, tolerance=10.0
 [Topological] Extraction complete | total=274, peaks=51, ridges=34, valleys=8, saddles=145, flat_zones=51
 [Topological] Average peak confidence: 0.987
 ```
