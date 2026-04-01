@@ -1,4 +1,12 @@
-# Heightmap Analysis Framework (WIP)
+# Heightmap Analysis Framework
+
+## Roadmap
+
+- Layers 0 - 3      : Finished
+- Layer 4           : Testing and Debugging
+- Layer 5           : to do...
+- auto calibration  : to do...
+- LLM-Friendly      : Started...
 
 ## Core Philosophy
 A heightmap is a 2.5D scalar field: perfect geometric surface information, zero information about what lies above, 
