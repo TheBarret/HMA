@@ -1,5 +1,7 @@
 # Heightmap Analysis Framework
 
+<img width="1024" src="https://github.com/user-attachments/assets/456c477f-f91c-49bf-a20d-fe05f71a8038" />
+
 ## Roadmap
 
 - Layers 0 - 3      : running and testing
@@ -24,9 +26,6 @@ using `synthetic terrain`  to generate heightmaps with known features.
 <img width="128" height="1731" alt="t_saddle_topology" src="https://github.com/user-attachments/assets/9e429b04-2fd5-45a4-8a1a-e78d2dc2a996" />
 
 Compare detected output features against ground truth will calibrate our model, using predefined config parameters located `core.py`.  
-
-<img width="1024" src="https://github.com/user-attachments/assets/456c477f-f91c-49bf-a20d-fe05f71a8038" />
-
 
 # Early Testing: Relational Analysis
 
