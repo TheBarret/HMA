@@ -316,6 +316,24 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
         peak._avg_slope = float(avg_slope)
         return peak
 
+    # Ridge Helper
+    def _smooth_spine_points(self, spine_points: List[PixelCoord], window: int) -> List[PixelCoord]:
+        """Apply moving average smoothing to spine points."""
+        if len(spine_points) < window:
+            return spine_points
+        
+        points = np.array(spine_points)
+        smoothed = []
+        half = window // 2
+        
+        for i in range(len(points)):
+            start = max(0, i - half)
+            end = min(len(points), i + half + 1)
+            window = points[start:end]
+            smoothed.append(np.mean(window, axis=0))
+        
+        return [(int(p[0]), int(p[1])) for p in smoothed]
+
     def _extract_ridges(self, heightmap: Heightmap, curvature_type: np.ndarray,
                     gaussian_curvature: np.ndarray, k_confidence: np.ndarray,
                     mean_curvature: np.ndarray, slope: Optional[np.ndarray],
@@ -358,6 +376,8 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
                 continue
 
             spine_points = self._order_spine_points(xs, ys)
+            spine_points = self._smooth_spine_points(spine_points, self.config.smooth_spine_window)
+            
             centroid_px = (int(np.mean(xs)), int(np.mean(ys)))
             elevations = z[ys, xs]
             elevation_range = (np.min(elevations), np.max(elevations))
@@ -393,7 +413,7 @@ class Layer3_TopologicalFeatures(PipelineLayer[List[TerrainFeature]]):
             ridges.append(ridge)
             validated_count += 1
         self._log(f"Thresholds hits: (len(xs) < min_ridge_length_px)={_rej1}")
-        self._log(f"Ridges validated: {validated_count}")
+        self._log(f"Ridges validated: {validated_count}, smoothing_window={self.config.smooth_spine_window}")
         return ridges
 
     def _extract_valleys(self, heightmap: Heightmap, curvature_type: np.ndarray,

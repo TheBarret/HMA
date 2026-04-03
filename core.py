@@ -2,14 +2,16 @@ import h5py
 import hashlib
 import json
 import numpy as np
-#import os.path
+
 from pathlib import Path
 from uuid import uuid4
 from enum import auto, Enum
+
 from typing import TypeAlias
 from typing import Dict, Any
 from typing import Optional
 from typing import List, Tuple, Union, Set
+
 from abc import ABC, abstractmethod
 from typing import Callable, Generic, TypeVar
 from dataclasses import dataclass, field, KW_ONLY
@@ -160,8 +162,11 @@ class PipelineConfig:
     peak_smooth_sigma: float = 2.5              # ndimage.gaussian_filter(z, sigma)
     
     # --- Ridges & Valleys (linear features) ---
-    min_ridge_length_px: int = 15                # [3-20] pixels, minimum ridge length
-    min_valley_length_px: int = 10               # [3-20] pixels, minimum valley length
+    min_ridge_length_px: int = 15                # [2-100] pixels, minimum ridge length
+    min_valley_length_px: int = 10               # [2-20] pixels, minimum valley length
+    
+    # --- Ridge Smoothing ---
+    smooth_spine_window: int = 5                # [1-10] Ridge spine smoothing window
     
     # --- Flat Zones (traversable areas) ---
     min_flat_zone_size_px: int = 80            # [50-500] pixels, minimum flat area
@@ -239,50 +244,6 @@ class PipelineConfig:
     # =========================================================================
     max_feature_coverage: float = 0.5           # Max 50% of map for any single feature
     
-    # --- Defensive Positions ---
-    threshold_major_peak: float = 15.0          # major peaks [m]
-    threshold_minor_peak: float = 5.0           # minor peaks [m]
-    saddle_elevation_high: float = 30.0         # saddle elevation high [m]
-    saddle_elevation_low: float = 10.0          # saddle elevation low [m]
-    valley_avg_slope: float = 15.0              # valley avg slope [m]
-    defensive_min_prominence_m: float = 8.0     # [5-30] meters, minimum height advantage
-    defensive_min_elevation_m: float = 5.0      # [2-20] meters, minimum absolute height
-    defensive_max_slope_deg: float = 25.0       # [15-35] degrees, max slope for defense
-    defensive_min_visibility: int = 5           # [3-15] number of visible features
-    defensive_prominence_divisor: float = 20.0     # [10-50] meters
-    defensive_visibility_divisor: float = 10.0     # [5-20] features
-    
-    # --- Observation Points ---
-    observation_visibility_divisor: float = 15.0   # [10-30] features
-    observation_min_prominence_m: float = 10.0  # [5-50] meters, minimum prominence
-    observation_min_visibility: int = 10        # [5-30] number of visible features
-    
-    # --- Assembly Areas ---
-    assembly_min_area_m2: float = 2000.0        # [500-10000] square meters, staging area
-    assembly_max_slope_deg: float = 5.0         # [2-10] degrees, max slope for assembly
-    assembly_major_area_threshold_m2: float = 10000.0  # [5000-25000] m²
-    assembly_capacity_divisor: float = 100.0           # [50-200] m² per unit
-    
-    # --- Chokepoints ---
-    chokepoint_min_connectivity: int = 2        # [2-5] minimum connections to be chokepoint
-    
-    # --- Cover positions ---
-    cover_quality_width_divisor: float = 10.0      # [5-20] meters
-    cover_min_width_m: float = 5.0              # [2-15] meters, minimum cover width
-    
-    # --- Drainage classification
-    drainage_major_threshold: int = 3             # [1-15~] upstream features
-    drainage_minor_threshold: int = 1              # [1-15~] upstream features
-    
-    # --- Ambush rating
-    ambush_slope_divisor: float = 30.0             # [20-45] degrees
-    ambush_ridge_divisor: float = 3.0              # [2-5] adjacent ridges
-
-    # --- Trafficability classification
-    trafficability_ideal_threshold_deg: float = 5.0    # [3-10] degrees
-    trafficability_good_threshold_deg: float = 15.0    # [10-25] degrees
-    
-    
     # Vehicle profiles
     VEHICLE_PROFILES = {
         'infantry'      : Vehicle('human', max_slope_deg=45.0, max_water_depth_m=0.5),
@@ -297,6 +258,7 @@ class PipelineConfig:
     # =========================================================================
     
     verbose: bool = True                        # [True/False] enable debug logging
+    verbose_interval: int = 8                   # [2-64] i % n == 0 { iterative_logs }
     cache_dir: str = 'cache'                    # [folder] cache data
    
     # =========================================================================
@@ -670,8 +632,7 @@ class Pipeline:
         
         for layer in self.layers:
             if isinstance(layer, Layer0_Calibration):
-                # Layer 0 creates the Heightmap from raw data (if needed)
-                # For this flow, we assume 'source' is already calibrated Heightmap
+                # assumes 'Heigtmap' object is available
                 continue 
             elif isinstance(layer, Layer1_LocalGeometry):
                 result = layer.execute(bundle["heightmap"])
@@ -692,372 +653,8 @@ class Pipeline:
                 
         raise RuntimeError("Pipeline has no return object [AnalyzedTerrain]")
         
-#
-#  Finalizing to an analyzed terrain object (LLM CONTEXT)
-#  
-@dataclass
-class AnalyzedTerrain:
-    """
-    The aggregated output of the full analysis pipeline.
-    
-    A vector-layer representation of terrain where every shape knows:
-    - What it is (geometric classification)
-    - Where it is (spatial bounds)
-    - What it connects to (topology)
-    - What it means (semantic tags)
-    
-    Also provides LLM-friendly query interfaces and pre-computed context.
-    """
-    
-    # =========================================================================
-    # CORE DATA (Populated by pipeline layers)
-    # =========================================================================
-    
-    # Source reference
-    source_heightmap: Heightmap
-    
-    # Vector layers (grouped by feature type)
-    peaks: List[ClassifiedFeature] = field(default_factory=list)
-    valleys: List[ClassifiedFeature] = field(default_factory=list)
-    ridges: List[ClassifiedFeature] = field(default_factory=list)
-    saddles: List[ClassifiedFeature] = field(default_factory=list)
-    flat_zones: List[ClassifiedFeature] = field(default_factory=list)
-    
-    # Relational data (populated by Layer 4)
-    visibility_graph: Dict[str, Set[str]] = field(default_factory=dict)
-    flow_network: Dict[str, List[str]] = field(default_factory=dict)
-    connectivity_graph: Dict[str, Set[str]] = field(default_factory=dict)
-    watersheds: Dict[str, Set[str]] = field(default_factory=dict)
-    flow_accumulation: Optional[ScalarField] = None
-    
-    # Semantic data (populated by Layer 5)
-    semantic_index: Dict[str, Any] = field(default_factory=dict)
-    
-    # =========================================================================
-    # LLM-FRIENDLY PRE-COMPUTED DATA
-    # =========================================================================
-    
-    # Natural language context (after pipeline, semantics)
-    terrain_narrative: str = ""
-    region_descriptions: Dict[str, str] = field(default_factory=dict)  # "north": "steep mountainous terrain"
-    feature_descriptions: Dict[str, str] = field(default_factory=dict)  # feature_id → human description
-    
-    # Pre-computed tactical answers
-    tactical_index: Dict[str, Any] = field(default_factory=dict)
-    
-    # Statistical summaries
-    summary_stats: Dict[str, Any] = field(default_factory=dict)
-    
-    # =========================================================================
-    # INTERNAL: Lazy-loaded spatial indexes (not serialized)
-    # =========================================================================
-    
-    _spatial_index: Any = field(default=None, init=False, repr=False)
-    _index_built: bool = field(default=False, init=False, repr=False)
-    
-    # =========================================================================
-    # QUERY INTERFACE
-    # =========================================================================
-    
-    def find_by_type(self, feature_type: type) -> List[ClassifiedFeature]:
-        """Return all features of specified class."""
-        type_map = {
-            PeakFeature: self.peaks,
-            RidgeFeature: self.ridges,
-            ValleyFeature: self.valleys,
-            SaddleFeature: self.saddles,
-            FlatZoneFeature: self.flat_zones,
-        }
-        return type_map.get(feature_type, [])
-    
-    def find_visible_from(self, feature_id: str) -> Set[str]:
-        """Return IDs of features visible from given feature."""
-        return self.visibility_graph.get(feature_id, set())
-    
-    def find_path(self, start_id: str, end_id: str, 
-                  traversability: Traversability = Traversability.FREE) -> Optional[List[str]]:
-        """
-        Find least-cost path between features respecting slope constraints.
-        Uses search *fast* algorithm on connectivity_graph.
-        """
-        if not self.connectivity_graph:
-            return None
-        
-        # Simple BFS
-        # TODO: upgrade to better algorithm
-        
-        from collections import deque
-        
-        if start_id not in self.connectivity_graph or end_id not in self.connectivity_graph:
-            return None
-        
-        queue = deque([(start_id, [start_id])])
-        visited = {start_id}
-        
-        while queue:
-            current, path = queue.popleft()
-            
-            if current == end_id:
-                return path
-            
-            for neighbor in self.connectivity_graph.get(current, set()):
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    queue.append((neighbor, path + [neighbor]))
-        
-        return None
-    
-    def query(self, **filters) -> List[ClassifiedFeature]:
-        """
-        Flexible query interface.
-        
-        Examples:
-          terrain.query(type=PeakFeature, min_prominence=50.0)
-          terrain.query(type=RidgeFeature, min_length=100)
-          terrain.query(type=FlatZoneFeature, min_area_m2=5000)
-          terrain.query(type=PeakFeature, defensive_rating__gt=0.7)
-        """
-        # Extract filter parameters
-        feature_type = filters.pop('type', None)
-        if feature_type is None:
-            raise ValueError("Query must include 'type' parameter")
-        
-        # Get feature list
-        features = self.find_by_type(feature_type)
-        if not features:
-            return []
-        
-        # Apply filters
-        results = []
-        for f in features:
-            match = True
-            
-            for key, value in filters.items():
-                # Handle comparison operators in key names (e.g., "prominence__gt")
-                if '__' in key:
-                    field_name, op = key.split('__')
-                else:
-                    field_name, op = key, 'eq'
-                
-                # Get the attribute value
-                if hasattr(f, field_name):
-                    attr_value = getattr(f, field_name)
-                elif field_name in f.metadata:
-                    attr_value = f.metadata[field_name]
-                else:
-                    match = False
-                    break
-                
-                # Apply comparison
-                if op == 'eq':
-                    if attr_value != value:
-                        match = False
-                elif op == 'gt':
-                    if not (attr_value > value):
-                        match = False
-                elif op == 'gte':
-                    if not (attr_value >= value):
-                        match = False
-                elif op == 'lt':
-                    if not (attr_value < value):
-                        match = False
-                elif op == 'lte':
-                    if not (attr_value <= value):
-                        match = False
-                elif op == 'contains':
-                    if value not in attr_value:
-                        match = False
-                else:
-                    raise ValueError(f"Unknown operator: {op}")
-                
-                if not match:
-                    break
-            
-            if match:
-                results.append(f)
-        
-        return results
-    
-    # =========================================================================
-    # LLM-FRIENDLY METHODS
-    # =========================================================================
-    
-    def get_feature_by_id(self, feature_id: str) -> Optional[ClassifiedFeature]:
-        """Retrieve a feature by its unique ID."""
-        for feature_list in [self.peaks, self.ridges, self.valleys, self.saddles, self.flat_zones]:
-            for f in feature_list:
-                if f.feature_id == feature_id:
-                    return f
-        return None
-    
-    def get_context_window(self, max_features: int = 10) -> str:
-        """
-        Generate a compact text summary for LLM consumption.
-        Returns a structured prompt-ready context string.
-        """
-        lines = []
-        
-        # Header
-        lines.append("TERRAIN ANALYSIS SUMMARY")
-        lines.append("=" * 50)
-        
-        # Narrative if available
-        if self.terrain_narrative:
-            lines.append(f"\n{self.terrain_narrative}\n")
-        
-        # Statistics
-        if self.summary_stats:
-            lines.append("STATISTICS")
-            lines.append("-" * 30)
-            elev = self.summary_stats.get('elevation', {})
-            if elev:
-                lines.append(f"Elevation: {elev.get('min', 0):.0f}m - {elev.get('max', 0):.0f}m (Δ{elev.get('range', 0):.0f}m)")
-            slope = self.summary_stats.get('slope', {})
-            if slope:
-                lines.append(f"Average slope: {slope.get('mean', 0):.1f}°")
-            lines.append(f"Features: {len(self.peaks)} peaks, {len(self.ridges)} ridges, {len(self.valleys)} valleys")
-        
-        # Key features (top N by prominence/size)
-        lines.append("\nKEY FEATURES")
-        lines.append("-" * 30)
-        
-        # Top peaks
-        if self.peaks:
-            sorted_peaks = sorted(self.peaks, key=lambda p: p.prominence, reverse=True)[:max_features//2]
-            lines.append("Most prominent peaks:")
-            for p in sorted_peaks:
-                desc = self.feature_descriptions.get(p.feature_id, f"peak at {p.centroid}")
-                lines.append(f"  • {desc} ({p.prominence:.0f}m prominence)")
-        
-        # Top ridges
-        if self.ridges:
-            sorted_ridges = sorted(self.ridges, key=lambda r: len(r.spine_points), reverse=True)[:max_features//2]
-            lines.append("\nLongest ridges:")
-            for r in sorted_ridges:
-                desc = self.feature_descriptions.get(r.feature_id, f"ridge at {r.centroid}")
-                lines.append(f"  • {desc}")
-        
-        # Regional descriptions
-        if self.region_descriptions:
-            lines.append("\nREGIONAL CHARACTER")
-            lines.append("-" * 30)
-            for region, desc in self.region_descriptions.items():
-                lines.append(f"  {region.capitalize()}: {desc}")
-        
-        # Tactical notes
-        if self.tactical_index:
-            lines.append("\nTACTICAL NOTES")
-            lines.append("-" * 30)
-            obs = self.tactical_index.get('observation_posts', [])[:3]
-            if obs:
-                lines.append("Recommended observation points:")
-                for o in obs:
-                    lines.append(f"  • {o.get('description', 'Unknown')}")
-            
-            choke = self.tactical_index.get('chokepoints', [])[:3]
-            if choke:
-                lines.append("\nNatural chokepoints:")
-                for c in choke:
-                    lines.append(f"  • {c.get('description', 'Unknown')}")
-        
-        return "\n".join(lines)
-    
-    def describe_feature(self, feature_id: str) -> str:
-        """Get human-readable description of a specific feature."""
-        if feature_id in self.feature_descriptions:
-            return self.feature_descriptions[feature_id]
-        
-        feature = self.get_feature_by_id(feature_id)
-        if feature is None: 
-            return f"Unknown feature: {feature_id}"
-        
-        if isinstance(feature, PeakFeature):
-            return f"Peak at {feature.centroid} with {feature.prominence:.0f}m prominence, {feature.avg_slope:.0f}° slopes"
-        elif isinstance(feature, RidgeFeature):
-            return f"Ridge spanning {len(feature.spine_points)} points, adjacent to {len(feature.adjacent_watersheds)} watersheds"
-        elif isinstance(feature, ValleyFeature):
-            return f"Valley along {len(feature.spine_points)} points"
-        elif isinstance(feature, SaddleFeature):
-            return f"Saddle at {feature.centroid} connecting ridges and valleys"
-        elif isinstance(feature, FlatZoneFeature):
-            return f"Flat zone of {feature.area_pixels} pixels, max slope {feature.get_max_slope:.0f}°"
-        
-        return f"{type(feature).__name__} at {feature.centroid}"
-    
-    def _build_spatial_index(self):
-        """Build spatial indexes for fast proximity queries."""
-        if self._index_built:
-            return
-        
-        try:
-            from scipy.spatial import KDTree
-            self._spatial_index = {}
-            
-            if self.peaks:
-                peak_coords = [p.centroid for p in self.peaks]
-                self._spatial_index['peaks'] = KDTree(peak_coords)
-            
-            # TODO: Add more feature types as we go...
-            
-            self._index_built = True
-        except ImportError:
-            pass  # scipy not available, skip indexing
-    
-    def find_nearby(self, feature_id: str, radius_m: float, feature_type: Optional[type] = None) -> List[ClassifiedFeature]:
-        """
-        Find features within radius of a given feature.
-        
-        Args:
-            feature_id: Target feature ID
-            radius_m: Search radius in meters
-            feature_type: Optional filter by feature type
-        """
-        target = self.get_feature_by_id(feature_id)
-        if target is None:
-            return []
-        
-        self._build_spatial_index()
-        
-        if self._spatial_index is None:
-            return []
-        
-        # Convert radius to pixels
-        radius_px = radius_m / self.source_heightmap.config.horizontal_scale
-        
-        results = []
-        target_px = target.centroid
-        
-        # Check each feature type
-        type_map = {
-            PeakFeature: self.peaks,
-            RidgeFeature: self.ridges,
-            ValleyFeature: self.valleys,
-            SaddleFeature: self.saddles,
-            FlatZoneFeature: self.flat_zones,
-        }
-        
-        for ftype, flist in type_map.items():
-            if feature_type is not None and ftype != feature_type:
-                continue
-            
-            for f in flist:
-                if f.feature_id == feature_id:
-                    continue
-                
-                # Calculate Euclidean distance in pixels
-                dx = f.centroid[0] - target_px[0]
-                dy = f.centroid[1] - target_px[1]
-                dist_px = (dx*dx + dy*dy) ** 0.5
-                
-                if dist_px <= radius_px:
-                    results.append(f)
-        
-        return results
-        
-        
 # ----------------------------------------------------
 #   Auto cache mechanic
-#   Supports: layer 0,1 and 3 
 # ----------------------------------------------------
 
 class Datacache:

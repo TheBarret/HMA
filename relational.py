@@ -311,7 +311,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
                 
                 flow_direction[y, x] = best_dir if max_drop > 0 else 0
         _acc += 1
-        if _acc % 16 == 0:
+        if _acc % self.config.verbose_interval == 0:
                 self._log(f"       -> y={y} of {h}")
                 
         # Step 2: Priority-flood resolution for flat areas
@@ -955,8 +955,8 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
                 #if visible_2_to_1:
                 #    visibility[f2.feature_id].add(f1.feature_id)
                 
-                if self.config.verbose and checked % 1024 == 1:
-                    self._log(f"Visibility checking, verified={checked}, visible_pairs={visible_pairs}")
+                if self.config.verbose and (checked % (self.config.verbose_interval * 1024)) == 0:
+                    self._log(f"    verified={checked}, visible_pairs={visible_pairs} ...")
         
         self._log(f"Visibility graph complete: {checked} checks, {visible_pairs} visible pairs")
         
@@ -1062,7 +1062,7 @@ class Layer4_Relational(PipelineLayer[Dict[str, Any]]):
             remaining_targets = set(filtered_targets)
             settled_costs = {}
             
-            if i % 16 == 0:
+            if i % self.config.verbose_interval == 0:
                 self._log(f"    #{i} [{source_id}] pairs={total_pairs_considered}")
             
             while pq and remaining_targets:

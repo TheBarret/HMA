@@ -970,16 +970,9 @@ def render(bundle: dict, features: list, relational: list, map_name: str = "UNDE
     # --- Legend ---
     _draw_legend(ax_topo, relational, features, (H, W), cell_size)
 
-    legend = _draw_legend(ax_topo, relational, features, (H, W), cell_size)
-    if legend and legend._loc == 'lower right':
-        stamp_x = 0.01  # Bottom-left
-        stamp_va = 'bottom'
-    else:
-        stamp_x = 0.01
-        stamp_va = 'bottom'
-        
     # --- Stamp ---
-    _draw_stamp(fig, ax_topo, map_name, cell_size, (H, W), len(features))
+    # todo: add/move 'stamp' specs to legend plot
+    #_draw_stamp(fig, ax_topo, map_name, cell_size, (H, W), len(features))
     
 
     # --- Figure title ---
