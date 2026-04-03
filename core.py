@@ -588,11 +588,11 @@ class FlatZoneFeature(ClassifiedFeature):
     
     @property
     def get_max_slope(self) -> float:
-        return self.metadata.get('max_slope', self.avg_slope)
+        return self.get('max_slope', self.avg_slope)
         
     @property
     def get_min_slope(self) -> float:
-        return self.metadata.get('min_slope', self.avg_slope)
+        return self.get('min_slope', self.avg_slope)
     
     @property
     def avg_slope(self) -> float:

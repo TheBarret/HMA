@@ -13,10 +13,10 @@ from core import ( Heightmap, ScalarField, ClassifiedFeature, PeakFeature, Ridge
 FEATURE_QUANTIFIERS: Dict[str, List[tuple]] = {
     "prominence" : [(0, 20, "small"), (20, 50, "moderate"), (50, 100, "prominent"), (100, 9999, "major")],
     "slope"      : [(0, 10, "gentle"), (10, 25, "moderate"), (25, 40, "steep"), (40, 90, "very steep")],
-    "area_m2"    : [(0, 500, "small"), (500, 2000, "medium-sized"), (2000, 10000, "large"), (10000, 999999, "extensive")],
-    "length_m"   : [(0, 100, "short"), (100, 300, "moderate-length"), (300, 800, "long"), (800, 9999, "extended")],
-    "elevation_m": [(0, 100, "low"), (100, 300, "moderate"), (300, 800, "high"), (800, 9999, "very high")],
-    "depth_m"    : [(0, 20, "shallow"), (20, 50, "moderate-depth"), (50, 100, "deep"), (100, 9999, "very deep")],
+    "area"    : [(0, 500, "small"), (500, 2000, "medium-sized"), (2000, 10000, "large"), (10000, 999999, "extensive")],
+    "length"   : [(0, 100, "short"), (100, 300, "moderate-length"), (300, 800, "long"), (800, 9999, "extended")],
+    "elevation": [(0, 100, "low"), (100, 300, "moderate"), (300, 800, "high"), (800, 9999, "very high")],
+    "depth"    : [(0, 20, "shallow"), (20, 50, "moderate-depth"), (50, 100, "deep"), (100, 9999, "very deep")],
 }
  
 FEATURE_DESC: Dict[str, str] = {
@@ -217,7 +217,10 @@ class AnalyzedTerrain:
             SaddleFeature  : "saddle",
             FlatZoneFeature: "flat_zone",
         }
-        return mapping.get(type(feature), "unknown")
+        _value = mapping.get(type(feature), "unknown")
+        if _value == "unknown":
+            print(f"Warning: _feature_type_key({feature.feature_type}') -> unknown")
+        return _value
  
     def _resolve_placeholder(self, feature: ClassifiedFeature, placeholder: str) -> str:
         if placeholder.endswith("_quant"):
@@ -259,6 +262,7 @@ class AnalyzedTerrain:
             return (FEATURE_SUFFIX["reference_sea"]
                     if elev < sea + 10.0
                     else FEATURE_SUFFIX["reference_ground"])
+        print(f"Warning: _resolve_placeholder({placeholder.feature_type}') -> unknown")
         return f"[unknown:{placeholder}]"
  
     def _metric_value(self, feature: ClassifiedFeature, metric: str) -> float:
@@ -288,6 +292,7 @@ class AnalyzedTerrain:
         for low, high, label in FEATURE_QUANTIFIERS.get(metric, []):
             if low <= value < high:
                 return label
+        print(f"Warning: _quantify(metric={metric}, value={value}') -> unknown")
         return "unknown"
  
     def _format_value(self, value: float) -> str:
