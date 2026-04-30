@@ -25,10 +25,10 @@ Calibrating is done by generate `Ground Truth Validation`, using `synthetic terr
 
 <img src="t_flatzone.png" /> <img src="t_single_peak.png" /> <img src="t_ridge.png" /> <img src="t_saddle.png" />
 
-<img width="128" height="1731" alt="t_flatzone_topology" src="https://github.com/user-attachments/assets/61be8b94-f567-4c67-821e-10a4b2d8cb7a" />
-<img width="128" height="1731" alt="t_single_peak_topology" src="https://github.com/user-attachments/assets/38776da8-8c99-456b-b943-d2bf749e1cb9" />
-<img width="128" height="1731" alt="t_ridge_topology" src="https://github.com/user-attachments/assets/f424c85a-4127-40dc-8e1a-3351b880d0b5" />
-<img width="128" height="1731" alt="t_saddle_topology" src="https://github.com/user-attachments/assets/9e429b04-2fd5-45a4-8a1a-e78d2dc2a996" />
+<img width="128" alt="t_flatzone_topology" src="https://github.com/user-attachments/assets/61be8b94-f567-4c67-821e-10a4b2d8cb7a" />
+<img width="128" alt="t_single_peak_topology" src="https://github.com/user-attachments/assets/38776da8-8c99-456b-b943-d2bf749e1cb9" />
+<img width="128" alt="t_ridge_topology" src="https://github.com/user-attachments/assets/f424c85a-4127-40dc-8e1a-3351b880d0b5" />
+<img width="128" alt="t_saddle_topology" src="https://github.com/user-attachments/assets/9e429b04-2fd5-45a4-8a1a-e78d2dc2a996" />
 
 Compare detected output features against ground truth will calibrate our model, using predefined config parameters located `core.py`.  
 
